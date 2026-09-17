@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Box, Camera, Image as ImageIcon, Layers3, Play, RotateCcw, Save, Sparkles, Upload, Video, X } from 'lucide-react'
-import '@google/model-viewer'
 import { startOrbitTracking } from './tracking/tracker.js'
 import './styles.css'
 
