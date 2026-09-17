@@ -135,10 +135,12 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     uiLoading: 'no',
     uiScanning: 'no',
     uiError: 'no',
-    filterMinCF: 0.0008,
-    filterBeta: 250,
-    missTolerance: 10,
-    warmupTolerance: 6,
+    // Lower cutoff reduces stationary jitter. Higher beta prevents the
+    // filtered pose from lagging and then catching up in visible jumps.
+    filterMinCF: 0.0002,
+    filterBeta: 1200,
+    missTolerance: 8,
+    warmupTolerance: 7,
   })
 
   const { renderer, scene, camera } = mindarThree
@@ -172,7 +174,7 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     lostTimer = setTimeout(() => {
       if (media) media.pause()
       onLost?.()
-    }, 180)
+    }, 140)
   }
 
   const ambient = new THREE.AmbientLight(0xffffff, 1.0)
