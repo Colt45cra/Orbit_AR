@@ -122,6 +122,58 @@ async function addModel(group, asset, transform) {
   return { media: null }
 }
 
+function createAnchorMatrixStabilizer() {
+  const rawPosition = new THREE.Vector3()
+  const rawQuaternion = new THREE.Quaternion()
+  const rawScale = new THREE.Vector3()
+  const smoothPosition = new THREE.Vector3()
+  const smoothQuaternion = new THREE.Quaternion()
+  const smoothScale = new THREE.Vector3()
+  const composed = new THREE.Matrix4()
+  let initialized = false
+
+  return {
+    reset() {
+      initialized = false
+    },
+    update(group) {
+      group.matrix.decompose(rawPosition, rawQuaternion, rawScale)
+
+      if (!initialized) {
+        smoothPosition.copy(rawPosition)
+        smoothQuaternion.copy(rawQuaternion)
+        smoothScale.copy(rawScale)
+        initialized = true
+      } else {
+        const positionDelta = smoothPosition.distanceTo(rawPosition)
+        const rotationDelta = smoothQuaternion.angleTo(rawQuaternion)
+        const scaleDelta = smoothScale.distanceTo(rawScale)
+
+        // Small pose changes are mostly feature/camera noise. Larger changes
+        // are followed progressively faster so deliberate phone motion stays responsive.
+        if (positionDelta > 0.0015) {
+          const alpha = positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : 0.10
+          smoothPosition.lerp(rawPosition, alpha)
+        }
+
+        if (rotationDelta > THREE.MathUtils.degToRad(0.18)) {
+          const alpha = rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? 0.25 : 0.09
+          smoothQuaternion.slerp(rawQuaternion, alpha)
+        }
+
+        if (scaleDelta > 0.0015) {
+          const alpha = scaleDelta > 0.045 ? 0.35 : 0.10
+          smoothScale.lerp(rawScale, alpha)
+        }
+      }
+
+      composed.compose(smoothPosition, smoothQuaternion, smoothScale)
+      group.matrix.copy(composed)
+      group.matrixWorldNeedsUpdate = true
+    },
+  }
+}
+
 export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus }) {
   if (!container || !targetFile || !asset) throw new Error('Trigger image and AR content are required')
 
@@ -135,12 +187,10 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     uiLoading: 'no',
     uiScanning: 'no',
     uiError: 'no',
-    // Lower cutoff reduces stationary jitter. Higher beta prevents the
-    // filtered pose from lagging and then catching up in visible jumps.
-    filterMinCF: 0.0002,
-    filterBeta: 1200,
+    filterMinCF: 0.001,
+    filterBeta: 1000,
     missTolerance: 8,
-    warmupTolerance: 7,
+    warmupTolerance: 6,
   })
 
   const { renderer, scene, camera } = mindarThree
@@ -150,6 +200,7 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace
 
   const anchor = mindarThree.addAnchor(0)
+  const stabilizeAnchor = createAnchorMatrixStabilizer()
 
   let media = null
   if (asset.kind === 'video') media = (await addVideo(anchor.group, asset, transform)).media
@@ -159,6 +210,7 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   let lostTimer = null
 
   anchor.onTargetFound = () => {
+    stabilizeAnchor.reset()
     if (lostTimer) {
       clearTimeout(lostTimer)
       lostTimer = null
@@ -169,12 +221,19 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   }
 
   anchor.onTargetLost = () => {
+    stabilizeAnchor.reset()
     onStatus?.('Searching for trigger…')
     if (lostTimer) clearTimeout(lostTimer)
     lostTimer = setTimeout(() => {
       if (media) media.pause()
       onLost?.()
     }, 140)
+  }
+
+  // MindAR calls this immediately after writing its final target-space matrix.
+  // Smooth that exact matrix in place so the asset never leaves the native anchor space.
+  anchor.onTargetUpdate = () => {
+    if (anchor.visible) stabilizeAnchor.update(anchor.group)
   }
 
   const ambient = new THREE.AmbientLight(0xffffff, 1.0)
