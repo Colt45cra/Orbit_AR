@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Box, Camera, Image as ImageIcon, Layers3, Play, RotateCcw, Save, Sparkles, Upload, Video, X } from 'lucide-react'
 import '@google/model-viewer'
+import { startOrbitTracking } from './tracking/tracker.js'
 import './styles.css'
 
 const emptyTransform = { x: 50, y: 50, scale: 1, rotation: 0, opacity: 1 }
@@ -12,8 +13,14 @@ function App() {
   const [asset, setAsset] = useState(null)
   const [transform, setTransform] = useState(emptyTransform)
   const [saved, setSaved] = useState(false)
+  const [arOpen, setArOpen] = useState(false)
+  const [arStatus, setArStatus] = useState('Preparing AR…')
+  const [compileProgress, setCompileProgress] = useState(0)
+  const [arError, setArError] = useState('')
   const triggerInput = useRef(null)
   const assetInput = useRef(null)
+  const arContainer = useRef(null)
+  const stopTracking = useRef(null)
 
   useEffect(() => {
     const raw = localStorage.getItem('orbit-ar-project')
@@ -32,10 +39,41 @@ function App() {
     return 'image'
   }, [asset])
 
+  useEffect(() => {
+    if (!arOpen || !arContainer.current || !trigger?.file || !asset) return
+    let cancelled = false
+    setCompileProgress(0)
+    setArError('')
+
+    startOrbitTracking({
+      container: arContainer.current,
+      targetFile: trigger.file,
+      asset: { ...asset, kind: assetKind },
+      transform,
+      onProgress: (value) => !cancelled && setCompileProgress(value),
+      onStatus: (value) => !cancelled && setArStatus(value),
+    }).then((stop) => {
+      if (cancelled) stop()
+      else stopTracking.current = stop
+    }).catch((error) => {
+      if (!cancelled) {
+        setArError(error?.message || 'AR could not start')
+        setArStatus('AR unavailable')
+      }
+    })
+
+    return () => {
+      cancelled = true
+      const stop = stopTracking.current
+      stopTracking.current = null
+      if (stop) stop()
+    }
+  }, [arOpen])
+
   function readFile(file, setter) {
     if (!file) return
     const url = URL.createObjectURL(file)
-    setter({ name: file.name, type: file.type || 'application/octet-stream', url })
+    setter({ name: file.name, type: file.type || 'application/octet-stream', url, file })
     setSaved(false)
   }
 
@@ -48,6 +86,13 @@ function App() {
   function resetTransform() {
     setTransform(emptyTransform)
     setSaved(false)
+  }
+
+  async function closeAR() {
+    const stop = stopTracking.current
+    stopTracking.current = null
+    if (stop) await stop()
+    setArOpen(false)
   }
 
   return (
@@ -122,7 +167,7 @@ function App() {
             <div className="status-row">
               <Status icon={<ImageIcon size={16}/>} label="Trigger" value={trigger ? 'Ready' : 'Missing'} active={!!trigger}/>
               <Status icon={assetKind === 'video' ? <Video size={16}/> : assetKind === 'model' ? <Box size={16}/> : <ImageIcon size={16}/>} label="Content" value={asset ? assetKind : 'Missing'} active={!!asset}/>
-              <Status icon={<Camera size={16}/>} label="Tracking" value="Next phase" active={false}/>
+              <Status icon={<Camera size={16}/>} label="Tracking" value="MindAR" active={true}/>
             </div>
           </section>
         </section>
@@ -131,11 +176,31 @@ function App() {
           <div className="tracking-icon"><Camera size={24}/></div>
           <div className="tracking-copy">
             <div className="section-title no-margin">Camera tracking pipeline</div>
-            <p>The editor is ready for a real image-target tracker. The next integration will compile the uploaded trigger into tracking data, recognize it through the phone camera, estimate pose, then anchor this same configured content to the physical image.</p>
+            <p>Your trigger is compiled locally in the browser, then Orbit uses the phone camera to recognize it and anchor the configured content to the physical image.</p>
           </div>
-          <button className="primary-btn" disabled><Play size={16}/> AR test coming next</button>
+          <button className="primary-btn" disabled={!trigger || !asset} onClick={() => setArOpen(true)}><Play size={16}/> Test in AR</button>
         </section>
       </main>
+
+      {arOpen && (
+        <div className="ar-modal">
+          <div ref={arContainer} className="ar-camera-stage" />
+          <div className="ar-topbar">
+            <div className="ar-status-wrap">
+              <span className="ar-dot" />
+              <div>
+                <strong>{arStatus}</strong>
+                {arStatus.includes('Compiling') && <span>{compileProgress}%</span>}
+              </div>
+            </div>
+            <button className="ar-close" onClick={closeAR} aria-label="Close AR"><X size={22}/></button>
+          </div>
+          <div className="ar-guide">
+            <div className="scan-frame"><i/><i/><i/><i/></div>
+            <p>{arError || 'Point the camera at your uploaded trigger image.'}</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -143,7 +208,7 @@ function App() {
 function Slider({ label, value, onChange, suffix='', ...props }) {
   return <div className="slider-row">
     <div className="slider-meta"><span>{label}</span><strong>{Number(value).toFixed(props.step && Number(props.step) < 1 ? 2 : 0)}{suffix}</strong></div>
-    <input type="range" value={value} onChange={e => { onChange(Number(e.target.value)); }} {...props} />
+    <input type="range" value={value} onChange={e => onChange(Number(e.target.value))} {...props} />
   </div>
 }
 
