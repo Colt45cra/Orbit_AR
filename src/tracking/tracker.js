@@ -42,7 +42,7 @@ function placement(transform) {
   }
 }
 
-async function addImage(anchor, asset, transform) {
+async function addImage(group, asset, transform) {
   const texture = await new THREE.TextureLoader().loadAsync(asset.url)
   texture.colorSpace = THREE.SRGBColorSpace
   const img = texture.image
@@ -54,11 +54,11 @@ async function addImage(anchor, asset, transform) {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material)
   mesh.position.set(p.x, p.y, 0.01)
   mesh.rotation.z = p.rotation
-  anchor.group.add(mesh)
+  group.add(mesh)
   return { media: null }
 }
 
-async function addVideo(anchor, asset, transform) {
+async function addVideo(group, asset, transform) {
   const video = document.createElement('video')
   video.src = asset.url
   video.loop = true
@@ -79,11 +79,11 @@ async function addVideo(anchor, asset, transform) {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material)
   mesh.position.set(p.x, p.y, 0.01)
   mesh.rotation.z = p.rotation
-  anchor.group.add(mesh)
+  group.add(mesh)
   return { media: video }
 }
 
-async function addModel(anchor, asset, transform) {
+async function addModel(group, asset, transform) {
   const loader = new GLTFLoader()
   const gltf = await loader.loadAsync(asset.url)
   const p = placement(transform)
@@ -102,8 +102,47 @@ async function addModel(anchor, asset, transform) {
       node.material.opacity = p.opacity
     }
   })
-  anchor.group.add(root)
+  group.add(root)
   return { media: null }
+}
+
+function createPoseStabilizer() {
+  const targetPosition = new THREE.Vector3()
+  const targetQuaternion = new THREE.Quaternion()
+  const targetScale = new THREE.Vector3(1, 1, 1)
+  const currentPosition = new THREE.Vector3()
+  const currentQuaternion = new THREE.Quaternion()
+  const currentScale = new THREE.Vector3(1, 1, 1)
+  let initialized = false
+
+  return (matrix, outputGroup) => {
+    matrix.decompose(targetPosition, targetQuaternion, targetScale)
+
+    if (!initialized) {
+      currentPosition.copy(targetPosition)
+      currentQuaternion.copy(targetQuaternion)
+      currentScale.copy(targetScale)
+      initialized = true
+    } else {
+      const positionDelta = currentPosition.distanceTo(targetPosition)
+      const scaleDelta = currentScale.distanceTo(targetScale)
+      const rotationDelta = currentQuaternion.angleTo(targetQuaternion)
+
+      // Ignore tiny pose changes caused by camera / feature noise.
+      // Increase responsiveness automatically when the user actually moves.
+      const positionAlpha = positionDelta < 0.0025 ? 0 : positionDelta > 0.035 ? 0.38 : 0.16
+      const rotationAlpha = rotationDelta < 0.004 ? 0 : rotationDelta > 0.08 ? 0.34 : 0.13
+      const scaleAlpha = scaleDelta < 0.002 ? 0 : scaleDelta > 0.03 ? 0.30 : 0.11
+
+      if (positionAlpha) currentPosition.lerp(targetPosition, positionAlpha)
+      if (rotationAlpha) currentQuaternion.slerp(targetQuaternion, rotationAlpha)
+      if (scaleAlpha) currentScale.lerp(targetScale, scaleAlpha)
+    }
+
+    outputGroup.position.copy(currentPosition)
+    outputGroup.quaternion.copy(currentQuaternion)
+    outputGroup.scale.copy(currentScale)
+  }
 }
 
 export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus }) {
@@ -118,27 +157,42 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     uiLoading: 'no',
     uiScanning: 'no',
     uiError: 'no',
-    filterMinCF: 0.001,
-    filterBeta: 0.01,
-    missTolerance: 5,
-    warmupTolerance: 5,
+    // Stronger One Euro filtering for image targets. Lower cutoff smooths
+    // stationary jitter; beta keeps real camera movement responsive.
+    filterMinCF: 0.0005,
+    filterBeta: 700,
+    // Persist briefly through single-frame tracking misses to avoid flicker.
+    missTolerance: 10,
+    warmupTolerance: 6,
   })
 
   const { renderer, scene, camera } = mindarThree
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   const anchor = mindarThree.addAnchor(0)
 
-  let media = null
-  if (asset.kind === 'video') media = (await addVideo(anchor, asset, transform)).media
-  else if (asset.kind === 'model') await addModel(anchor, asset, transform)
-  else await addImage(anchor, asset, transform)
+  // Render content on a separate group. We read MindAR's raw/filtered anchor
+  // pose each frame and apply an additional adaptive stabilization pass.
+  const stabilizedGroup = new THREE.Group()
+  stabilizedGroup.visible = false
+  scene.add(stabilizedGroup)
+  const stabilizePose = createPoseStabilizer()
 
+  let media = null
+  if (asset.kind === 'video') media = (await addVideo(stabilizedGroup, asset, transform)).media
+  else if (asset.kind === 'model') await addModel(stabilizedGroup, asset, transform)
+  else await addImage(stabilizedGroup, asset, transform)
+
+  let targetVisible = false
   anchor.onTargetFound = () => {
+    targetVisible = true
+    stabilizedGroup.visible = true
     onStatus?.('Target found')
     if (media) media.play().catch(() => {})
     onFound?.()
   }
   anchor.onTargetLost = () => {
+    targetVisible = false
+    stabilizedGroup.visible = false
     onStatus?.('Searching for trigger…')
     if (media) media.pause()
     onLost?.()
@@ -149,7 +203,10 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
 
   await mindarThree.start()
   onStatus?.('Searching for trigger…')
-  renderer.setAnimationLoop(() => renderer.render(scene, camera))
+  renderer.setAnimationLoop(() => {
+    if (targetVisible) stabilizePose(anchor.group.matrix, stabilizedGroup)
+    renderer.render(scene, camera)
+  })
 
   return async () => {
     try { media?.pause() } catch {}
