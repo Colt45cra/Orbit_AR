@@ -51,7 +51,7 @@ function applySRGB(texture) {
 function makeUnlitMaterial(map, opacity) {
   return new THREE.MeshBasicMaterial({
     map,
-    transparent: opacity < 1 || true,
+    transparent: true,
     opacity,
     side: THREE.DoubleSide,
     toneMapped: false,
@@ -122,97 +122,9 @@ async function addModel(group, asset, transform) {
   return { media: null }
 }
 
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b)
-  const mid = Math.floor(sorted.length / 2)
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
-}
-
-function createPoseStabilizer() {
-  const history = []
-  const HISTORY_SIZE = 7
-
-  const samplePosition = new THREE.Vector3()
-  const sampleQuaternion = new THREE.Quaternion()
-  const sampleScale = new THREE.Vector3(1, 1, 1)
-
-  const currentPosition = new THREE.Vector3()
-  const currentQuaternion = new THREE.Quaternion()
-  const currentScale = new THREE.Vector3(1, 1, 1)
-  let initialized = false
-
-  return (matrix, outputGroup) => {
-    matrix.decompose(samplePosition, sampleQuaternion, sampleScale)
-
-    history.push({
-      position: samplePosition.clone(),
-      quaternion: sampleQuaternion.clone(),
-      scale: sampleScale.clone(),
-    })
-    if (history.length > HISTORY_SIZE) history.shift()
-
-    const targetPosition = new THREE.Vector3(
-      median(history.map((h) => h.position.x)),
-      median(history.map((h) => h.position.y)),
-      median(history.map((h) => h.position.z)),
-    )
-    const targetScale = new THREE.Vector3(
-      median(history.map((h) => h.scale.x)),
-      median(history.map((h) => h.scale.y)),
-      median(history.map((h) => h.scale.z)),
-    )
-
-    const targetQuaternion = history[Math.floor(history.length / 2)].quaternion.clone()
-
-    if (!initialized) {
-      currentPosition.copy(targetPosition)
-      currentQuaternion.copy(targetQuaternion)
-      currentScale.copy(targetScale)
-      initialized = true
-    } else {
-      const posDelta = currentPosition.distanceTo(targetPosition)
-      const rotDelta = currentQuaternion.angleTo(targetQuaternion)
-      const scaleDelta = currentScale.distanceTo(targetScale)
-
-      const posDeadZone = 0.004
-      const rotDeadZone = THREE.MathUtils.degToRad(0.45)
-      const scaleDeadZone = 0.0035
-
-      const posAlpha = posDelta < posDeadZone ? 0 : posDelta > 0.08 ? 0.30 : posDelta > 0.03 ? 0.16 : 0.075
-      const rotAlpha = rotDelta < rotDeadZone ? 0 : rotDelta > 0.16 ? 0.28 : rotDelta > 0.06 ? 0.14 : 0.06
-      const scaleAlpha = scaleDelta < scaleDeadZone ? 0 : scaleDelta > 0.05 ? 0.20 : 0.07
-
-      if (posAlpha) {
-        const next = currentPosition.clone().lerp(targetPosition, posAlpha)
-        const step = next.clone().sub(currentPosition)
-        const maxStep = posDelta > 0.08 ? 0.03 : 0.012
-        if (step.length() > maxStep) step.setLength(maxStep)
-        currentPosition.add(step)
-      }
-
-      if (rotAlpha) {
-        const allowed = rotDelta > 0.16 ? THREE.MathUtils.degToRad(4.0) : THREE.MathUtils.degToRad(1.5)
-        const stepT = Math.min(1, allowed / Math.max(rotDelta, 1e-6), rotAlpha)
-        currentQuaternion.slerp(targetQuaternion, stepT)
-      }
-
-      if (scaleAlpha) {
-        const nextScale = currentScale.clone().lerp(targetScale, scaleAlpha)
-        const scaleStep = nextScale.clone().sub(currentScale)
-        const maxScaleStep = scaleDelta > 0.05 ? 0.025 : 0.01
-        if (scaleStep.length() > maxScaleStep) scaleStep.setLength(maxScaleStep)
-        currentScale.add(scaleStep)
-      }
-    }
-
-    outputGroup.position.copy(currentPosition)
-    outputGroup.quaternion.copy(currentQuaternion)
-    outputGroup.scale.copy(currentScale)
-  }
-}
-
 export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus }) {
   if (!container || !targetFile || !asset) throw new Error('Trigger image and AR content are required')
+
   onStatus?.('Compiling trigger image…')
   const compiled = await compileOrbitTarget(targetFile, onProgress)
   onStatus?.('Starting camera…')
@@ -223,10 +135,10 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     uiLoading: 'no',
     uiScanning: 'no',
     uiError: 'no',
-    filterMinCF: 0.00035,
-    filterBeta: 500,
-    missTolerance: 14,
-    warmupTolerance: 7,
+    filterMinCF: 0.0008,
+    filterBeta: 250,
+    missTolerance: 10,
+    warmupTolerance: 6,
   })
 
   const { renderer, scene, camera } = mindarThree
@@ -236,17 +148,12 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace
 
   const anchor = mindarThree.addAnchor(0)
-  const stabilizedGroup = new THREE.Group()
-  stabilizedGroup.visible = false
-  scene.add(stabilizedGroup)
-  const stabilizePose = createPoseStabilizer()
 
   let media = null
-  if (asset.kind === 'video') media = (await addVideo(stabilizedGroup, asset, transform)).media
-  else if (asset.kind === 'model') await addModel(stabilizedGroup, asset, transform)
-  else await addImage(stabilizedGroup, asset, transform)
+  if (asset.kind === 'video') media = (await addVideo(anchor.group, asset, transform)).media
+  else if (asset.kind === 'model') await addModel(anchor.group, asset, transform)
+  else await addImage(anchor.group, asset, transform)
 
-  let targetVisible = false
   let lostTimer = null
 
   anchor.onTargetFound = () => {
@@ -254,19 +161,15 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
       clearTimeout(lostTimer)
       lostTimer = null
     }
-    targetVisible = true
-    stabilizedGroup.visible = true
     onStatus?.('Target found')
     if (media) media.play().catch(() => {})
     onFound?.()
   }
 
   anchor.onTargetLost = () => {
-    targetVisible = false
     onStatus?.('Searching for trigger…')
     if (lostTimer) clearTimeout(lostTimer)
     lostTimer = setTimeout(() => {
-      stabilizedGroup.visible = false
       if (media) media.pause()
       onLost?.()
     }, 180)
@@ -277,10 +180,7 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
 
   await mindarThree.start()
   onStatus?.('Searching for trigger…')
-  renderer.setAnimationLoop(() => {
-    if (targetVisible) stabilizePose(anchor.group.matrix, stabilizedGroup)
-    renderer.render(scene, camera)
-  })
+  renderer.setAnimationLoop(() => renderer.render(scene, camera))
 
   return async () => {
     try { if (lostTimer) clearTimeout(lostTimer) } catch {}
