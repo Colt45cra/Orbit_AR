@@ -165,18 +165,18 @@ function createAnchorMatrixStabilizer() {
 
         // Small pose changes are mostly feature/camera noise. Larger changes
         // are followed progressively faster so deliberate phone motion stays responsive.
-        if (positionDelta > 0.0015) {
-          const alpha = positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : 0.10
+        if (positionDelta > 0.0025) {
+          const alpha = positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : 0.075
           smoothPosition.lerp(rawPosition, alpha)
         }
 
-        if (rotationDelta > THREE.MathUtils.degToRad(0.18)) {
-          const alpha = rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? 0.25 : 0.09
+        if (rotationDelta > THREE.MathUtils.degToRad(0.30)) {
+          const alpha = rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? 0.25 : 0.07
           smoothQuaternion.slerp(rawQuaternion, alpha)
         }
 
-        if (scaleDelta > 0.0015) {
-          const alpha = scaleDelta > 0.045 ? 0.35 : 0.10
+        if (scaleDelta > 0.0025) {
+          const alpha = scaleDelta > 0.045 ? 0.35 : 0.08
           smoothScale.lerp(rawScale, alpha)
         }
       }
