@@ -223,13 +223,24 @@ function EmptyTrigger() {
 
 function AssetLayer({ asset, kind, transform }) {
   const style = {
-    left: `${transform.x}%`, top: `${transform.y}%`,
-    transform: `translate(-50%, -50%) perspective(700px) rotateX(${transform.tilt ?? 0}deg) rotateZ(${transform.rotation}deg) scale(${transform.scale})`,
+    left: `${transform.x}%`,
+    top: `${transform.y}%`,
+    transform: `translate(-50%, -100%) perspective(700px) rotateX(${transform.tilt ?? 0}deg) rotateZ(${transform.rotation}deg) scale(${transform.scale})`,
     opacity: transform.opacity,
   }
-  if (kind === 'video') return <video className="asset-layer" style={style} src={asset.url} autoPlay muted loop playsInline controls={false}/>
-  if (kind === 'model') return <model-viewer class="asset-layer model-layer" style={style} src={asset.url} camera-controls auto-rotate shadow-intensity="1" exposure="1" />
-  return <img className="asset-layer" style={style} src={asset.url} alt="AR content"/>
+
+  return <div className="asset-transform" style={style}>
+    {kind === 'video' && <video className="asset-preview" src={asset.url} autoPlay muted loop playsInline controls={false}/>}
+    {kind === 'model' && <model-viewer class="asset-preview model-layer" src={asset.url} camera-controls auto-rotate shadow-intensity="1" exposure="1" />}
+    {kind === 'image' && <img className="asset-preview" src={asset.url} alt="AR content"/>}
+    <div className="transform-gizmo" aria-hidden="true">
+      <span className="gizmo-axis gizmo-x"><b>X</b></span>
+      <span className="gizmo-axis gizmo-y"><b>Y</b></span>
+      <span className="gizmo-axis gizmo-z"><b>Z</b></span>
+      <span className="gizmo-pivot" />
+      <span className="gizmo-base-label">BOTTOM</span>
+    </div>
+  </div>
 }
 
 function Status({ icon, label, value, active }) {
