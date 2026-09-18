@@ -38,6 +38,7 @@ function placement(transform) {
     y: (50 - transform.y) / 100,
     scale: transform.scale,
     rotation: -THREE.MathUtils.degToRad(transform.rotation),
+    tilt: THREE.MathUtils.degToRad(transform.tilt ?? 0),
     opacity: transform.opacity,
   }
 }
@@ -69,6 +70,7 @@ async function addImage(group, asset, transform) {
   const height = width / aspect
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), makeUnlitMaterial(texture, p.opacity))
   mesh.position.set(p.x, p.y, 0.01)
+  mesh.rotation.x = p.tilt
   mesh.rotation.z = p.rotation
   group.add(mesh)
   return { media: null }
@@ -93,6 +95,7 @@ async function addVideo(group, asset, transform) {
   const height = width / aspect
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), makeUnlitMaterial(texture, p.opacity))
   mesh.position.set(p.x, p.y, 0.01)
+  mesh.rotation.x = p.tilt
   mesh.rotation.z = p.rotation
   group.add(mesh)
   return { media: video }
@@ -110,6 +113,7 @@ async function addModel(group, asset, transform) {
   const normalized = (0.62 / max) * p.scale
   root.scale.setScalar(normalized)
   root.position.set(p.x, p.y, 0.04)
+  root.rotation.x = p.tilt
   root.rotation.z = p.rotation
   root.traverse((node) => {
     if (node.material) {
