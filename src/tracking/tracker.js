@@ -136,7 +136,8 @@ async function addModel(group, asset, transform) {
   return { media: null }
 }
 
-function createAnchorMatrixStabilizer() {
+function createAnchorMatrixStabilizer(tiltDegrees = 0) {
+  const upright = THREE.MathUtils.clamp(Math.abs(tiltDegrees) / 90, 0, 1)
   const rawPosition = new THREE.Vector3()
   const rawQuaternion = new THREE.Quaternion()
   const rawScale = new THREE.Vector3()
@@ -165,18 +166,28 @@ function createAnchorMatrixStabilizer() {
 
         // Small pose changes are mostly feature/camera noise. Larger changes
         // are followed progressively faster so deliberate phone motion stays responsive.
-        if (positionDelta > 0.0025) {
-          const alpha = positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : 0.075
+        const positionDeadZone = THREE.MathUtils.lerp(0.0025, 0.0032, upright)
+        const rotationDeadZone = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(0.30, 0.48, upright))
+        const scaleDeadZone = THREE.MathUtils.lerp(0.0025, 0.0030, upright)
+
+        if (positionDelta > positionDeadZone) {
+          const smallAlpha = THREE.MathUtils.lerp(0.075, 0.055, upright)
+          const alpha = positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : smallAlpha
           smoothPosition.lerp(rawPosition, alpha)
         }
 
-        if (rotationDelta > THREE.MathUtils.degToRad(0.30)) {
-          const alpha = rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? 0.25 : 0.07
+        if (rotationDelta > rotationDeadZone) {
+          // Upright planes visually amplify tiny angular noise at their top edge,
+          // so damp only the micro-rotation band more strongly as tilt approaches 90°.
+          const smallAlpha = THREE.MathUtils.lerp(0.07, 0.04, upright)
+          const mediumAlpha = THREE.MathUtils.lerp(0.25, 0.20, upright)
+          const alpha = rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? mediumAlpha : smallAlpha
           smoothQuaternion.slerp(rawQuaternion, alpha)
         }
 
-        if (scaleDelta > 0.0025) {
-          const alpha = scaleDelta > 0.045 ? 0.35 : 0.08
+        if (scaleDelta > scaleDeadZone) {
+          const smallAlpha = THREE.MathUtils.lerp(0.08, 0.06, upright)
+          const alpha = scaleDelta > 0.045 ? 0.35 : smallAlpha
           smoothScale.lerp(rawScale, alpha)
         }
       }
@@ -214,7 +225,7 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace
 
   const anchor = mindarThree.addAnchor(0)
-  const stabilizeAnchor = createAnchorMatrixStabilizer()
+  const stabilizeAnchor = createAnchorMatrixStabilizer(transform.tilt ?? 0)
 
   let media = null
   if (asset.kind === 'video') media = (await addVideo(anchor.group, asset, transform)).media
