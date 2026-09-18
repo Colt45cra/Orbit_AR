@@ -4,7 +4,7 @@ import { Box, Camera, Image as ImageIcon, Layers3, Play, RotateCcw, Save, Sparkl
 import { startOrbitTracking } from './tracking/tracker.js'
 import './styles.css'
 
-const emptyTransform = { x: 50, y: 50, scale: 1, rotation: 0, opacity: 1 }
+const emptyTransform = { x: 50, y: 50, scale: 1, rotation: 0, tilt: 0, opacity: 1 }
 
 function App() {
   const [projectName, setProjectName] = useState('Untitled Orbit')
@@ -27,7 +27,7 @@ function App() {
     try {
       const parsed = JSON.parse(raw)
       if (parsed.projectName) setProjectName(parsed.projectName)
-      if (parsed.transform) setTransform(parsed.transform)
+      if (parsed.transform) setTransform({ ...emptyTransform, ...parsed.transform })
     } catch {}
   }, [])
 
@@ -144,6 +144,7 @@ function App() {
             <Slider label="Vertical" min="0" max="100" value={transform.y} onChange={v => setTransform(t => ({...t, y:v}))} suffix="%" />
             <Slider label="Scale" min="0.2" max="3" step="0.05" value={transform.scale} onChange={v => setTransform(t => ({...t, scale:v}))} suffix="×" />
             <Slider label="Rotation" min="-180" max="180" value={transform.rotation} onChange={v => setTransform(t => ({...t, rotation:v}))} suffix="°" />
+            <Slider label="Tilt from target" min="0" max="90" value={transform.tilt ?? 0} onChange={v => setTransform(t => ({...t, tilt:v}))} suffix="°" />
             <Slider label="Opacity" min="0.1" max="1" step="0.05" value={transform.opacity} onChange={v => setTransform(t => ({...t, opacity:v}))} />
           </aside>
 
@@ -223,7 +224,7 @@ function EmptyTrigger() {
 function AssetLayer({ asset, kind, transform }) {
   const style = {
     left: `${transform.x}%`, top: `${transform.y}%`,
-    transform: `translate(-50%, -50%) scale(${transform.scale}) rotate(${transform.rotation}deg)`,
+    transform: `translate(-50%, -50%) perspective(700px) rotateX(${transform.tilt ?? 0}deg) rotateZ(${transform.rotation}deg) scale(${transform.scale})`,
     opacity: transform.opacity,
   }
   if (kind === 'video') return <video className="asset-layer" style={style} src={asset.url} autoPlay muted loop playsInline controls={false}/>
