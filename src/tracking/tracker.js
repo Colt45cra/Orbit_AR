@@ -147,11 +147,13 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
   const composed = new THREE.Matrix4()
   let initialized = false
   let quietFrames = 0
+  let settledLocked = false
 
   return {
     reset() {
       initialized = false
       quietFrames = 0
+      settledLocked = false
     },
     update(group) {
       group.matrix.decompose(rawPosition, rawQuaternion, rawScale)
@@ -179,18 +181,36 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
         const quietScale = THREE.MathUtils.lerp(0.0050, 0.0065, upright)
         const isQuiet = positionDelta < quietPosition && rotationDelta < quietRotation && scaleDelta < quietScale
 
-        if (isQuiet) quietFrames = Math.min(quietFrames + 1, 20)
-        else quietFrames = 0
+        const releasePosition = THREE.MathUtils.lerp(0.012, 0.015, upright)
+        const releaseRotation = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(1.5, 2.0, upright))
+        const releaseScale = THREE.MathUtils.lerp(0.010, 0.013, upright)
 
-        const settled = quietFrames >= 5
+        if (!settledLocked) {
+          if (isQuiet) quietFrames = Math.min(quietFrames + 1, 20)
+          else quietFrames = 0
 
-        if (!settled && positionDelta > positionDeadZone) {
+          if (quietFrames >= 5) settledLocked = true
+        } else if (
+          positionDelta > releasePosition ||
+          rotationDelta > releaseRotation ||
+          scaleDelta > releaseScale
+        ) {
+          // Hysteresis: stay locked through ordinary micro-noise and release
+          // only when a clearly deliberate pose change exceeds the wider threshold.
+          settledLocked = false
+          quietFrames = 0
+          smoothPosition.lerp(rawPosition, 0.35)
+          smoothQuaternion.slerp(rawQuaternion, 0.30)
+          smoothScale.lerp(rawScale, 0.25)
+        }
+
+        if (!settledLocked && positionDelta > positionDeadZone) {
           const smallAlpha = THREE.MathUtils.lerp(0.075, 0.055, upright)
           const alpha = positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : smallAlpha
           smoothPosition.lerp(rawPosition, alpha)
         }
 
-        if (!settled && rotationDelta > rotationDeadZone) {
+        if (!settledLocked && rotationDelta > rotationDeadZone) {
           // Upright planes visually amplify tiny angular noise at their top edge,
           // so damp only the micro-rotation band more strongly as tilt approaches 90°.
           const smallAlpha = THREE.MathUtils.lerp(0.07, 0.04, upright)
@@ -199,22 +219,10 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
           smoothQuaternion.slerp(rawQuaternion, alpha)
         }
 
-        if (!settled && scaleDelta > scaleDeadZone) {
+        if (!settledLocked && scaleDelta > scaleDeadZone) {
           const smallAlpha = THREE.MathUtils.lerp(0.08, 0.06, upright)
           const alpha = scaleDelta > 0.045 ? 0.35 : smallAlpha
           smoothScale.lerp(rawScale, alpha)
-        }
-
-        // Release the settled pose immediately on deliberate movement.
-        if (settled && (
-          positionDelta > THREE.MathUtils.lerp(0.012, 0.015, upright) ||
-          rotationDelta > THREE.MathUtils.degToRad(THREE.MathUtils.lerp(1.5, 2.0, upright)) ||
-          scaleDelta > THREE.MathUtils.lerp(0.010, 0.013, upright)
-        )) {
-          quietFrames = 0
-          smoothPosition.lerp(rawPosition, 0.35)
-          smoothQuaternion.slerp(rawQuaternion, 0.30)
-          smoothScale.lerp(rawScale, 0.25)
         }
       }
 
