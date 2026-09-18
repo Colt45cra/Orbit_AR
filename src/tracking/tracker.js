@@ -68,11 +68,14 @@ async function addImage(group, asset, transform) {
   const p = placement(transform)
   const width = 0.72 * p.scale
   const height = width / aspect
+  const pivot = new THREE.Group()
+  pivot.position.set(p.x, p.y, 0.01)
+  pivot.rotation.x = p.tilt
+  pivot.rotation.z = p.rotation
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), makeUnlitMaterial(texture, p.opacity))
-  mesh.position.set(p.x, p.y, 0.01)
-  mesh.rotation.x = p.tilt
-  mesh.rotation.z = p.rotation
-  group.add(mesh)
+  mesh.position.set(0, height / 2, 0)
+  pivot.add(mesh)
+  group.add(pivot)
   return { media: null }
 }
 
@@ -93,11 +96,14 @@ async function addVideo(group, asset, transform) {
   const p = placement(transform)
   const width = 0.72 * p.scale
   const height = width / aspect
+  const pivot = new THREE.Group()
+  pivot.position.set(p.x, p.y, 0.01)
+  pivot.rotation.x = p.tilt
+  pivot.rotation.z = p.rotation
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), makeUnlitMaterial(texture, p.opacity))
-  mesh.position.set(p.x, p.y, 0.01)
-  mesh.rotation.x = p.tilt
-  mesh.rotation.z = p.rotation
-  group.add(mesh)
+  mesh.position.set(0, height / 2, 0)
+  pivot.add(mesh)
+  group.add(pivot)
   return { media: video }
 }
 
@@ -112,9 +118,12 @@ async function addModel(group, asset, transform) {
   const max = Math.max(size.x, size.y, size.z) || 1
   const normalized = (0.62 / max) * p.scale
   root.scale.setScalar(normalized)
-  root.position.set(p.x, p.y, 0.04)
-  root.rotation.x = p.tilt
-  root.rotation.z = p.rotation
+  const scaledBox = new THREE.Box3().setFromObject(root)
+  const pivot = new THREE.Group()
+  pivot.position.set(p.x, p.y, 0.04)
+  pivot.rotation.x = p.tilt
+  pivot.rotation.z = p.rotation
+  root.position.y -= scaledBox.min.y
   root.traverse((node) => {
     if (node.material) {
       node.material.transparent = p.opacity < 1 || node.material.transparent
@@ -122,7 +131,8 @@ async function addModel(group, asset, transform) {
       node.material.toneMapped = false
     }
   })
-  group.add(root)
+  pivot.add(root)
+  group.add(pivot)
   return { media: null }
 }
 
