@@ -12,8 +12,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.4.0-ar-startup-fix"
+        versionCode = 5
+        versionName = "0.5.0-runtime-stability"
     }
 
     buildTypes {
