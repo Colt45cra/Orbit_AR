@@ -148,6 +148,7 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
   const previousRawPosition = new THREE.Vector3()
   const previousRawQuaternion = new THREE.Quaternion()
   const predictedPosition = new THREE.Vector3()
+  const rawDeltaPosition = new THREE.Vector3()
   const predictedQuaternion = new THREE.Quaternion()
   const deltaQuaternion = new THREE.Quaternion()
   const predictionStep = new THREE.Quaternion()
@@ -193,10 +194,8 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
           // Prediction is tightly capped to avoid overshoot on noisy detections.
           const predictionSeconds = Math.min(0.018, dt * 0.75)
           const velocityScale = predictionSeconds / dt
-          predictedPosition.addScaledVector(
-            rawPosition.clone().sub(previousRawPosition),
-            Math.min(velocityScale, 0.75)
-          )
+          rawDeltaPosition.copy(rawPosition).sub(previousRawPosition)
+          predictedPosition.addScaledVector(rawDeltaPosition, Math.min(velocityScale, 0.75))
 
           deltaQuaternion.copy(previousRawQuaternion).invert().multiply(rawQuaternion)
           predictionStep.copy(identityQuaternion).slerp(deltaQuaternion, Math.min(velocityScale, 0.65))
