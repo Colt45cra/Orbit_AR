@@ -55,6 +55,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -167,7 +168,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
         Column(Modifier.fillMaxSize().padding(padding)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
-                Text("v0.4 · AR startup fix", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text("v0.5 · Runtime stability", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("1 · Images") }, modifier = Modifier.weight(1f).testTag("images-tab"))
@@ -274,7 +275,7 @@ private fun NativeARScreen(
 ) {
     BackHandler(onBack = onBack)
     var showControls by remember { mutableStateOf(false) }
-    var trackedImage by remember { mutableStateOf<AugmentedImage?>(null) }
+    val detectedImages = remember { mutableStateListOf<AugmentedImage>() }
     var status by remember { mutableStateOf("Point camera at trigger") }
     var arFailure by remember { mutableStateOf<String?>(null) }
     var sessionKey by remember { mutableIntStateOf(0) }
@@ -302,31 +303,35 @@ private fun NativeARScreen(
                     status = "Point camera at trigger"
                 },
                 onSessionFailed = { exception ->
-                    trackedImage = null
+                    detectedImages.clear()
                     status = "Couldn't start AR"
                     val detail = exception.message?.takeIf { it.isNotBlank() } ?: "No additional details were provided."
                     arFailure = "${exception.javaClass.simpleName}: $detail"
                 },
-                onSessionUpdated = { session, frame ->
-                val full = session
-                    .getAllTrackables(AugmentedImage::class.java)
-                    .firstOrNull {
-                        it.trackingState == TrackingState.TRACKING &&
-                            it.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING
+                onSessionUpdated = { _, frame ->
+                    frame.getUpdatedTrackables(AugmentedImage::class.java).forEach { image ->
+                        if (
+                            image.trackingState == TrackingState.TRACKING &&
+                            image.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING &&
+                            detectedImages.none { it.index == image.index }
+                        ) {
+                            detectedImages.add(image)
+                        }
                     }
 
-                trackedImage = full
-                status = when {
-                    frame.camera.trackingState != TrackingState.TRACKING -> "Camera tracking limited"
-                    full != null -> "Trigger found"
-                    else -> "Looking for your trigger"
-                }
-            },
+                    detectedImages.removeAll { it.trackingState == TrackingState.STOPPED }
+
+                    status = when {
+                        frame.camera.trackingState != TrackingState.TRACKING -> "Camera tracking limited"
+                        detectedImages.isNotEmpty() -> "Trigger found"
+                        else -> "Looking for your trigger"
+                    }
+                },
             onTrackingFailureChanged = { reason ->
                 if (reason != null) status = reason.name.replace('_', ' ')
             }
         ) {
-            trackedImage?.let { image ->
+            detectedImages.forEach { image ->
                 AugmentedImageNode(
                     augmentedImage = image,
                     applyImageScale = false
@@ -338,8 +343,8 @@ private fun NativeARScreen(
                         rotation = Rotation(x = tiltDegrees - 90f)
                     )
                 }
-                }
             }
+        }
         }
 
         Column(
@@ -364,7 +369,7 @@ private fun NativeARScreen(
             Column(Modifier.padding(16.dp).heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    if (trackedImage != null) "Move around to explore your AR image."
+                    if (detectedImages.isNotEmpty()) "Move around to explore your AR image."
                     else if (arFailure != null) "ARCore could not start the camera session."
                     else "Point at the full trigger image. Move slowly in good light.",
                     style = MaterialTheme.typography.bodySmall,
@@ -379,7 +384,7 @@ private fun NativeARScreen(
                     Button(
                         onClick = {
                             arFailure = null
-                            trackedImage = null
+                            detectedImages.clear()
                             status = "Starting AR…"
                             sessionKey += 1
                         },
