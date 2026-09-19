@@ -70,6 +70,7 @@ import com.google.ar.core.AugmentedImageDatabase
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
+import com.orbitar.nativeapp.room.RoomModeScreen
 import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.ar.node.AugmentedImageNode
 import io.github.sceneview.math.Position
@@ -116,11 +117,17 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
     val imagesScroll = rememberLazyListState()
     val placementScroll = rememberLazyListState()
     var runningAr by remember { mutableStateOf(false) }
+    var roomMode by remember { mutableStateOf(false) }
+    var pendingRoomPermission by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) runningAr = true
-        else error = "Camera access is needed for AR. Allow it in Android Settings, then try again."
+        if (granted) {
+            if (pendingRoomPermission) roomMode = true else runningAr = true
+        } else {
+            error = "Camera access is needed for AR. Allow it in Android Settings, then try again."
+        }
+        pendingRoomPermission = false
     }
     val triggerPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {
@@ -140,6 +147,11 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
             loading = false
         }
     }
+    if (roomMode) {
+        RoomModeScreen(onBack = { roomMode = false })
+        return
+    }
+
     if (runningAr && triggerBitmap != null && popupBitmap != null) {
         NativeARScreen(triggerBitmap!!, popupBitmap!!, targetWidthCm / 100f,
             popupWidthCm / 100f, tiltDegrees, offsetX, offsetZ, onBack = { runningAr = false },
@@ -157,7 +169,10 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
                     Button(onClick = {
                         if (tab == 0) tab = 1
                         else if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) runningAr = true
-                        else permission.launch(Manifest.permission.CAMERA)
+                        else {
+                            pendingRoomPermission = false
+                            permission.launch(Manifest.permission.CAMERA)
+                        }
                     }, enabled = ready, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(16.dp)) {
                         Text(if (tab == 0) "Place images →" else "Launch AR", fontWeight = FontWeight.Bold)
                     }
@@ -166,9 +181,27 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
-                Text("v0.5 · Runtime stability", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text("v0.6 · Room Mode", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+                OutlinedButton(
+                    onClick = {
+                        if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                            roomMode = true
+                        } else {
+                            pendingRoomPermission = true
+                            permission.launch(Manifest.permission.CAMERA)
+                        }
+                    }
+                ) {
+                    Text("Room Mode")
+                }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("1 · Images") }, modifier = Modifier.weight(1f).testTag("images-tab"))
