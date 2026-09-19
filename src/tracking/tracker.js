@@ -145,27 +145,71 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
   const smoothQuaternion = new THREE.Quaternion()
   const smoothScale = new THREE.Vector3()
   const composed = new THREE.Matrix4()
+  const previousRawPosition = new THREE.Vector3()
+  const previousRawQuaternion = new THREE.Quaternion()
+  const predictedPosition = new THREE.Vector3()
+  const predictedQuaternion = new THREE.Quaternion()
+  const deltaQuaternion = new THREE.Quaternion()
+  const predictionStep = new THREE.Quaternion()
+  const identityQuaternion = new THREE.Quaternion()
   let initialized = false
   let quietFrames = 0
   let settledLocked = false
+  let previousUpdateTime = 0
 
   return {
     reset() {
       initialized = false
       quietFrames = 0
       settledLocked = false
+      previousUpdateTime = 0
     },
     update(group) {
       group.matrix.decompose(rawPosition, rawQuaternion, rawScale)
+
+      const now = performance.now()
 
       if (!initialized) {
         smoothPosition.copy(rawPosition)
         smoothQuaternion.copy(rawQuaternion)
         smoothScale.copy(rawScale)
+        previousRawPosition.copy(rawPosition)
+        previousRawQuaternion.copy(rawQuaternion)
+        previousUpdateTime = now
         initialized = true
       } else {
-        const positionDelta = smoothPosition.distanceTo(rawPosition)
-        const rotationDelta = smoothQuaternion.angleTo(rawQuaternion)
+        const dt = THREE.MathUtils.clamp((now - previousUpdateTime) / 1000, 1 / 120, 0.08)
+        const rawTravel = previousRawPosition.distanceTo(rawPosition)
+        const rawTurn = previousRawQuaternion.angleTo(rawQuaternion)
+        const linearSpeed = rawTravel / dt
+        const angularSpeed = rawTurn / dt
+
+        const moving = linearSpeed > 0.10 || angularSpeed > 0.45
+        predictedPosition.copy(rawPosition)
+        predictedQuaternion.copy(rawQuaternion)
+
+        if (moving) {
+          // Compensate for one small camera/render interval of tracking latency.
+          // Prediction is tightly capped to avoid overshoot on noisy detections.
+          const predictionSeconds = Math.min(0.018, dt * 0.75)
+          const velocityScale = predictionSeconds / dt
+          predictedPosition.addScaledVector(
+            rawPosition.clone().sub(previousRawPosition),
+            Math.min(velocityScale, 0.75)
+          )
+
+          deltaQuaternion.copy(previousRawQuaternion).invert().multiply(rawQuaternion)
+          predictionStep.copy(identityQuaternion).slerp(deltaQuaternion, Math.min(velocityScale, 0.65))
+          predictedQuaternion.multiply(predictionStep).normalize()
+
+          settledLocked = false
+          quietFrames = 0
+        }
+
+        const targetPosition = moving ? predictedPosition : rawPosition
+        const targetQuaternion = moving ? predictedQuaternion : rawQuaternion
+        const positionDelta = smoothPosition.distanceTo(targetPosition)
+        const rotationDelta = smoothQuaternion.angleTo(targetQuaternion)
         const scaleDelta = smoothScale.distanceTo(rawScale)
 
         // Small pose changes are mostly feature/camera noise. Larger changes
@@ -206,24 +250,32 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
 
         if (!settledLocked && positionDelta > positionDeadZone) {
           const smallAlpha = THREE.MathUtils.lerp(0.075, 0.055, upright)
-          const alpha = positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : smallAlpha
-          smoothPosition.lerp(rawPosition, alpha)
+          const alpha = moving
+            ? (positionDelta > 0.07 ? 0.90 : positionDelta > 0.025 ? 0.78 : 0.62)
+            : (positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : smallAlpha)
+          smoothPosition.lerp(targetPosition, alpha)
         }
 
         if (!settledLocked && rotationDelta > rotationDeadZone) {
-          // Upright planes visually amplify tiny angular noise at their top edge,
-          // so damp only the micro-rotation band more strongly as tilt approaches 90°.
+          // Upright planes visually amplify tiny angular noise at their top edge.
+          // During real movement, switch to a high-response path to prevent visible lag.
           const smallAlpha = THREE.MathUtils.lerp(0.07, 0.04, upright)
           const mediumAlpha = THREE.MathUtils.lerp(0.25, 0.20, upright)
-          const alpha = rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? mediumAlpha : smallAlpha
-          smoothQuaternion.slerp(rawQuaternion, alpha)
+          const alpha = moving
+            ? (rotationDelta > 0.14 ? 0.88 : rotationDelta > 0.045 ? 0.76 : 0.58)
+            : (rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? mediumAlpha : smallAlpha)
+          smoothQuaternion.slerp(targetQuaternion, alpha)
         }
 
         if (!settledLocked && scaleDelta > scaleDeadZone) {
           const smallAlpha = THREE.MathUtils.lerp(0.08, 0.06, upright)
-          const alpha = scaleDelta > 0.045 ? 0.35 : smallAlpha
+          const alpha = moving ? 0.45 : (scaleDelta > 0.045 ? 0.35 : smallAlpha)
           smoothScale.lerp(rawScale, alpha)
         }
+
+        previousRawPosition.copy(rawPosition)
+        previousRawQuaternion.copy(rawQuaternion)
+        previousUpdateTime = now
       }
 
       composed.compose(smoothPosition, smoothQuaternion, smoothScale)
@@ -246,8 +298,9 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     uiLoading: 'no',
     uiScanning: 'no',
     uiError: 'no',
-    filterMinCF: 0.001,
-    filterBeta: 1000,
+    // Let MindAR react faster during motion; Orbit's settled lock handles stillness.
+    filterMinCF: 0.005,
+    filterBeta: 1700,
     missTolerance: 8,
     warmupTolerance: 6,
   })
