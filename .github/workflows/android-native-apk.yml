@@ -58,7 +58,6 @@ jobs:
           working-directory: android-native
           script: |
             gradle :app:connectedDebugAndroidTest --stacktrace
-            adb pull /sdcard/Android/data/com.orbitar.nativeapp/files/placement.png ../placement.png
 
       - name: Upload UI verification
         if: always()
@@ -66,6 +65,5 @@ jobs:
         with:
           name: orbit-ui-verification
           path: |
-            placement.png
             android-native/app/build/reports/androidTests/
             android-native/app/build/reports/tests/
