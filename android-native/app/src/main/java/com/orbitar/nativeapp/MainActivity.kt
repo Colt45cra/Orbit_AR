@@ -52,6 +52,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,8 +66,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.ar.core.AugmentedImage
 import com.google.ar.core.AugmentedImageDatabase
-import com.google.ar.core.CameraConfig
-import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
@@ -74,7 +74,6 @@ import io.github.sceneview.ar.node.AugmentedImageNode
 import io.github.sceneview.math.Position
 import io.github.sceneview.math.Rotation
 import io.github.sceneview.math.Size
-import java.util.EnumSet
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -168,7 +167,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
         Column(Modifier.fillMaxSize().padding(padding)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
-                Text("v0.3 · Placement", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text("v0.4 · AR startup fix", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("1 · Images") }, modifier = Modifier.weight(1f).testTag("images-tab"))
@@ -277,31 +276,38 @@ private fun NativeARScreen(
     var showControls by remember { mutableStateOf(false) }
     var trackedImage by remember { mutableStateOf<AugmentedImage?>(null) }
     var status by remember { mutableStateOf("Point camera at trigger") }
-    var fpsMode by remember { mutableStateOf("Selecting camera") }
+    var arFailure by remember { mutableStateOf<String?>(null) }
+    var sessionKey by remember { mutableIntStateOf(0) }
 
     val popupAspect = popupBitmap.width.toFloat() / popupBitmap.height.coerceAtLeast(1)
     val popupHeightMeters = popupWidthMeters / popupAspect
 
     Box(modifier = Modifier.fillMaxSize()) {
-        ARSceneView(
-            modifier = Modifier.fillMaxSize(),
-            planeRenderer = false,
-            imageStabilizationMode = Config.ImageStabilizationMode.EIS,
-            updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE,
-            focusMode = Config.FocusMode.AUTO,
-            sessionCameraConfig = { session ->
-                bestTrackingCameraConfig(session).also {
-                    fpsMode = if (it.fpsRange.upper >= 60) "60 FPS tracking" else "30 FPS tracking"
-                }
-            },
-            sessionConfiguration = { session, config ->
+        key(sessionKey) {
+            ARSceneView(
+                modifier = Modifier.fillMaxSize(),
+                planeRenderer = false,
+                sessionCameraConfig = null,
+                updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE,
+                focusMode = Config.FocusMode.AUTO,
+                sessionConfiguration = { session, config ->
                 config.planeFindingMode = Config.PlaneFindingMode.DISABLED
                 config.lightEstimationMode = Config.LightEstimationMode.DISABLED
                 config.augmentedImageDatabase = AugmentedImageDatabase(session).apply {
                     addImage("orbit-target", triggerBitmap, targetWidthMeters)
                 }
-            },
-            onSessionUpdated = { session, frame ->
+                },
+                onSessionCreated = {
+                    arFailure = null
+                    status = "Point camera at trigger"
+                },
+                onSessionFailed = { exception ->
+                    trackedImage = null
+                    status = "Couldn't start AR"
+                    val detail = exception.message?.takeIf { it.isNotBlank() } ?: "No additional details were provided."
+                    arFailure = "${exception.javaClass.simpleName}: $detail"
+                },
+                onSessionUpdated = { session, frame ->
                 val full = session
                     .getAllTrackables(AugmentedImage::class.java)
                     .firstOrNull {
@@ -332,6 +338,7 @@ private fun NativeARScreen(
                         rotation = Rotation(x = tiltDegrees - 90f)
                     )
                 }
+                }
             }
         }
 
@@ -345,16 +352,43 @@ private fun NativeARScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(status, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-            Text(fpsMode, style = MaterialTheme.typography.bodySmall)
+            Text(
+                if (arFailure == null) "ARCore native image tracking" else "Session startup failed",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         Surface(modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
             color = Color(0xEE111511), shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.padding(16.dp).heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(if (trackedImage != null) "Move around to explore your AR image." else "Point at the full trigger image. Move slowly in good light.",
-                    style = MaterialTheme.typography.bodySmall)
-                if (showControls) {
+                Text(
+                    if (trackedImage != null) "Move around to explore your AR image."
+                    else if (arFailure != null) "ARCore could not start the camera session."
+                    else "Point at the full trigger image. Move slowly in good light.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                arFailure?.let { failure ->
+                    Text(
+                        failure,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Button(
+                        onClick = {
+                            arFailure = null
+                            trackedImage = null
+                            status = "Starting AR…"
+                            sessionKey += 1
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) {
+                        Text("Try again")
+                    }
+                }
+                if (showControls && arFailure == null) {
                     LabeledSlider("Image width", popupWidthMeters, "${(popupWidthMeters * 100).toInt()} cm", 0.02f..0.4f, onWidthChange)
                     TiltControls(tiltDegrees, onTiltChange)
                 }
@@ -367,23 +401,6 @@ private fun NativeARScreen(
             }
         }
     }
-}
-
-private fun bestTrackingCameraConfig(session: Session): CameraConfig {
-    val sixtyFpsFilter = CameraConfigFilter(session).apply {
-        targetFps = EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_60)
-        depthSensorUsage = EnumSet.of(CameraConfig.DepthSensorUsage.DO_NOT_USE)
-    }
-    val sixty = session.getSupportedCameraConfigs(sixtyFpsFilter)
-    if (sixty.isNotEmpty()) {
-        return sixty.maxByOrNull { it.textureSize.width * it.textureSize.height } ?: sixty.first()
-    }
-
-    val thirtyFpsFilter = CameraConfigFilter(session).apply {
-        targetFps = EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_30)
-        depthSensorUsage = EnumSet.of(CameraConfig.DepthSensorUsage.DO_NOT_USE)
-    }
-    return session.getSupportedCameraConfigs(thirtyFpsFilter).firstOrNull() ?: session.cameraConfig
 }
 
 private fun decodeBitmap(context: Context, uri: Uri): Bitmap? {
