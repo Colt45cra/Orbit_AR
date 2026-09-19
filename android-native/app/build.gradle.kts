@@ -9,10 +9,11 @@ android {
 
     defaultConfig {
         applicationId = "com.orbitar.nativeapp"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0-native-beta"
+        versionCode = 3
+        versionName = "0.3.0-placement-beta"
     }
 
     buildTypes {
@@ -43,6 +44,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    testImplementation("junit:junit:4.13.2")
 
     implementation("com.google.ar:core:1.56.0")
     implementation("io.github.sceneview:arsceneview:4.37.0")

@@ -1,5 +1,8 @@
 package com.orbitar.nativeapp
 
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.platform.testTag
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.Context
@@ -99,14 +102,19 @@ private fun OrbitTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun OrbitNativeApp() {
+internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var triggerBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var popupBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var triggerBitmap by remember { mutableStateOf<Bitmap?>(initialTrigger) }
+    var popupBitmap by remember { mutableStateOf<Bitmap?>(initialPopup) }
     var targetWidthCm by rememberSaveable { mutableFloatStateOf(10f) }
     var popupWidthCm by rememberSaveable { mutableFloatStateOf(8f) }
     var tiltDegrees by rememberSaveable { mutableFloatStateOf(90f) }
+    var offsetX by rememberSaveable { mutableFloatStateOf(0f) }
+    var offsetZ by rememberSaveable { mutableFloatStateOf(0f) }
+    var tab by rememberSaveable { mutableStateOf(0) }
+    val imagesScroll = rememberLazyListState()
+    val placementScroll = rememberLazyListState()
     var runningAr by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -134,7 +142,7 @@ private fun OrbitNativeApp() {
     }
     if (runningAr && triggerBitmap != null && popupBitmap != null) {
         NativeARScreen(triggerBitmap!!, popupBitmap!!, targetWidthCm / 100f,
-            popupWidthCm / 100f, tiltDegrees, onBack = { runningAr = false },
+            popupWidthCm / 100f, tiltDegrees, offsetX, offsetZ, onBack = { runningAr = false },
             onWidthChange = { popupWidthCm = it * 100f }, onTiltChange = { tiltDegrees = it })
         return
     }
@@ -147,42 +155,58 @@ private fun OrbitNativeApp() {
                     Text(if (loading) "Preparing your image…" else if (ready) "Ready to bring your image to life" else "Add both images to continue",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Button(onClick = {
-                        if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) runningAr = true
+                        if (tab == 0) tab = 1
+                        else if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) runningAr = true
                         else permission.launch(Manifest.permission.CAMERA)
                     }, enabled = ready, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(16.dp)) {
-                        Text("Launch AR", fontWeight = FontWeight.Bold)
+                        Text(if (tab == 0) "Place images →" else "Launch AR", fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("ORBIT", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black,
-                    modifier = Modifier.weight(1f))
-                Text("AR STUDIO", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+                Text("v0.3 · Placement", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Make reality\nmore interesting.", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                Text("Choose what your camera recognizes, then what appears in AR.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("1 · Images") }, modifier = Modifier.weight(1f).testTag("images-tab"))
+                FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("2 · Placement") }, modifier = Modifier.weight(1f).testTag("placement-tab"))
             }
-            PickerCard("01", "Trigger image", "The real image your camera will recognize.", triggerBitmap, !loading) { triggerPicker.launch("image/*") }
-            PickerCard("02", "AR image", "The image that appears above your trigger. PNG supports transparency.", popupBitmap, !loading) { popupPicker.launch("image/*") }
-            Surface(shape = RoundedCornerShape(24.dp), tonalElevation = 2.dp) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("03  Size & placement", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Measure the physical trigger from left to right for accurate scale.", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LabeledSlider("Trigger width", targetWidthCm, "${targetWidthCm.toInt()} cm", 4f..60f) { targetWidthCm = it }
-                    LabeledSlider("AR image width", popupWidthCm, "${popupWidthCm.toInt()} cm", 2f..40f) { popupWidthCm = it }
-                    TiltControls(tiltDegrees) { tiltDegrees = it }
+            if (tab == 0) {
+                LazyColumn(state = imagesScroll, modifier = Modifier.weight(1f).fillMaxWidth().testTag("images-list"),
+                    contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    item { Text("Choose your two images", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+                    item { PickerCard("01", "Trigger image", "The real image your camera will recognize.", triggerBitmap, !loading) { triggerPicker.launch("image/*") } }
+                    item { PickerCard("02", "AR image", "The image that appears on your trigger. PNG supports transparency.", popupBitmap, !loading) { popupPicker.launch("image/*") } }
+                    item {
+                        Text("Next: see both images together and place your AR image on the trigger.", modifier = Modifier.testTag("images-end"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    item { Text("Use a detailed, matte trigger in good light. The camera needs to see the whole trigger when scanning.", style = MaterialTheme.typography.bodySmall) }
+                    item { error?.let { Text(it, color = MaterialTheme.colorScheme.error) } }
+                }
+            } else {
+                LazyColumn(state = placementScroll, modifier = Modifier.weight(1f).fillMaxWidth().testTag("placement-list"),
+                    contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    item {
+                        if (triggerBitmap != null && popupBitmap != null) {
+                            PlacementPreview(triggerBitmap!!, popupBitmap!!, targetWidthCm / 100f, popupWidthCm / 100f,
+                                tiltDegrees, offsetX, offsetZ, onMove = { x, z -> offsetX = x; offsetZ = z })
+                        } else Text("Choose a trigger and an AR image in the Images tab to preview placement.")
+                    }
+                    item { Text("Size & position", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+                    item { Text("Measure the printed trigger from left to right. Preview and camera use the same placement.", style = MaterialTheme.typography.bodySmall) }
+                    item { LabeledSlider("Trigger width", targetWidthCm, "${targetWidthCm.toInt()} cm", 4f..60f) { targetWidthCm = it } }
+                    item { LabeledSlider("AR image width", popupWidthCm, "${popupWidthCm.toInt()} cm", 2f..40f) { popupWidthCm = it } }
+                    item { TiltControls(tiltDegrees) { tiltDegrees = it } }
+                    item { LabeledSlider("Left / right", offsetX, "${(offsetX * 100).toInt()} cm", -0.6f..0.6f) { offsetX = it } }
+                    item { LabeledSlider("Back / forward", offsetZ, "${(offsetZ * 100).toInt()} cm", -0.6f..0.6f) { offsetZ = it } }
+                    item { OutlinedButton(onClick = { offsetX = 0f; offsetZ = 0f; popupWidthCm = 8f; tiltDegrees = 90f }, modifier = Modifier.fillMaxWidth().testTag("placement-end")) { Text("Reset placement") } }
+                    item { error?.let { Text(it, color = MaterialTheme.colorScheme.error) } }
                 }
             }
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Text("For best results, use a detailed, matte trigger in good light. Keep the whole trigger visible when scanning.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -243,6 +267,8 @@ private fun NativeARScreen(
     targetWidthMeters: Float,
     popupWidthMeters: Float,
     tiltDegrees: Float,
+    offsetX: Float,
+    offsetZ: Float,
     onBack: () -> Unit,
     onWidthChange: (Float) -> Unit,
     onTiltChange: (Float) -> Unit
@@ -302,8 +328,8 @@ private fun NativeARScreen(
                     ImageNode(
                         bitmap = popupBitmap,
                         size = Size(x = popupWidthMeters, y = popupHeightMeters),
-                        position = Position(x = 0f, y = popupHeightMeters / 2f, z = 0f),
-                        rotation = Rotation(x = 90f - tiltDegrees)
+                        position = placementCenter(popupHeightMeters, tiltDegrees, offsetX, offsetZ).let { Position(it.x, it.y, it.z) },
+                        rotation = Rotation(x = tiltDegrees - 90f)
                     )
                 }
             }
