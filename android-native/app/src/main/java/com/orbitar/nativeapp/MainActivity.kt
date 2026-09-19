@@ -1,5 +1,7 @@
 package com.orbitar.nativeapp
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -7,10 +9,23 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -86,140 +101,121 @@ private fun OrbitTheme(content: @Composable () -> Unit) {
 @Composable
 private fun OrbitNativeApp() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var triggerBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var popupBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var targetWidthCm by remember { mutableFloatStateOf(10f) }
-    var popupWidthCm by remember { mutableFloatStateOf(8f) }
-    var tiltDegrees by remember { mutableFloatStateOf(90f) }
+    var targetWidthCm by rememberSaveable { mutableFloatStateOf(10f) }
+    var popupWidthCm by rememberSaveable { mutableFloatStateOf(8f) }
+    var tiltDegrees by rememberSaveable { mutableFloatStateOf(90f) }
     var runningAr by remember { mutableStateOf(false) }
-
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) runningAr = true
+        else error = "Camera access is needed for AR. Allow it in Android Settings, then try again."
+    }
     val triggerPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        triggerBitmap = uri?.let { decodeBitmap(context, it) }
+        if (uri != null) scope.launch {
+            loading = true
+            error = null
+            val bitmap = withContext(Dispatchers.IO) { decodeBitmap(context, uri) }
+            if (bitmap != null) triggerBitmap = bitmap else error = "Couldn't open that image. Try another JPG or PNG."
+            loading = false
+        }
     }
     val popupPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        popupBitmap = uri?.let { decodeBitmap(context, it) }
+        if (uri != null) scope.launch {
+            loading = true
+            error = null
+            val bitmap = withContext(Dispatchers.IO) { decodeBitmap(context, uri) }
+            if (bitmap != null) popupBitmap = bitmap else error = "Couldn't open that image. Try another JPG or PNG."
+            loading = false
+        }
     }
-
     if (runningAr && triggerBitmap != null && popupBitmap != null) {
-        NativeARScreen(
-            triggerBitmap = triggerBitmap!!,
-            popupBitmap = popupBitmap!!,
-            targetWidthMeters = targetWidthCm / 100f,
-            popupWidthMeters = popupWidthCm / 100f,
-            tiltDegrees = tiltDegrees,
-            onBack = { runningAr = false }
-        )
+        NativeARScreen(triggerBitmap!!, popupBitmap!!, targetWidthCm / 100f,
+            popupWidthCm / 100f, tiltDegrees, onBack = { runningAr = false },
+            onWidthChange = { popupWidthCm = it * 100f }, onTiltChange = { tiltDegrees = it })
         return
     }
+    val ready = triggerBitmap != null && popupBitmap != null && !loading
+    Scaffold(
+        bottomBar = {
+            Surface(tonalElevation = 4.dp) {
+                Column(Modifier.navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (loading) "Preparing your image…" else if (ready) "Ready to bring your image to life" else "Add both images to continue",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = {
+                        if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) runningAr = true
+                        else permission.launch(Manifest.permission.CAMERA)
+                    }, enabled = ready, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(16.dp)) {
+                        Text("Launch AR", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("ORBIT", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black,
+                    modifier = Modifier.weight(1f))
+                Text("AR STUDIO", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Make reality\nmore interesting.", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+                Text("Choose what your camera recognizes, then what appears in AR.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            PickerCard("01", "Trigger image", "The real image your camera will recognize.", triggerBitmap, !loading) { triggerPicker.launch("image/*") }
+            PickerCard("02", "AR image", "The image that appears above your trigger. PNG supports transparency.", popupBitmap, !loading) { popupPicker.launch("image/*") }
+            Surface(shape = RoundedCornerShape(24.dp), tonalElevation = 2.dp) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("03  Size & placement", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Measure the physical trigger from left to right for accurate scale.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LabeledSlider("Trigger width", targetWidthCm, "${targetWidthCm.toInt()} cm", 4f..60f) { targetWidthCm = it }
+                    LabeledSlider("AR image width", popupWidthCm, "${popupWidthCm.toInt()} cm", 2f..40f) { popupWidthCm = it }
+                    TiltControls(tiltDegrees) { tiltDegrees = it }
+                }
+            }
+            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Text("For best results, use a detailed, matte trigger in good light. Keep the whole trigger visible when scanning.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
 
-    Scaffold { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Text(
-                text = "ORBIT AR • NATIVE",
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Professional ARCore image tracking",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Choose a trigger and popup image, enter the real trigger width, then test native tracking."
-            )
-
-            PickerCard(
-                title = "Trigger image",
-                bitmap = triggerBitmap,
-                buttonText = "Choose trigger",
-                onPick = { triggerPicker.launch("image/*") }
-            )
-            PickerCard(
-                title = "Popup image",
-                bitmap = popupBitmap,
-                buttonText = "Choose popup",
-                onPick = { popupPicker.launch("image/*") }
-            )
-
-            LabeledSlider(
-                label = "Real trigger width",
-                value = targetWidthCm,
-                valueText = "\${targetWidthCm.toInt()} cm",
-                range = 4f..60f,
-                onChange = { targetWidthCm = it }
-            )
-            LabeledSlider(
-                label = "Popup width",
-                value = popupWidthCm,
-                valueText = "\${popupWidthCm.toInt()} cm",
-                range = 2f..40f,
-                onChange = { popupWidthCm = it }
-            )
-            LabeledSlider(
-                label = "Tilt from trigger",
-                value = tiltDegrees,
-                valueText = "\${tiltDegrees.toInt()}°",
-                range = 0f..90f,
-                onChange = { tiltDegrees = it }
-            )
-
-            Spacer(Modifier.weight(1f))
-
-            Button(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                enabled = triggerBitmap != null && popupBitmap != null,
-                onClick = { runningAr = true }
-            ) {
-                Text("Start Native AR")
+@Composable
+private fun PickerCard(step: String, title: String, description: String, bitmap: Bitmap?, enabled: Boolean, onPick: () -> Unit) {
+    Surface(shape = RoundedCornerShape(24.dp), tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).clickable(enabled = enabled, onClick = onPick)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(Modifier.size(68.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFF252C24)), contentAlignment = Alignment.Center) {
+                    if (bitmap != null) Image(bitmap.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    else Text(step, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.headlineSmall)
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(if (bitmap == null) description else "Selected · ${bitmap.width} × ${bitmap.height}",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            OutlinedButton(onClick = onPick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text(if (bitmap == null) "Choose image" else "Change image")
             }
         }
     }
 }
 
 @Composable
-private fun PickerCard(
-    title: String,
-    bitmap: Bitmap?,
-    buttonText: String,
-    onPick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp))
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = title,
-                modifier = Modifier.size(74.dp)
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(74.dp)
-                    .background(Color(0xFF202620), RoundedCornerShape(12.dp))
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.Bold)
-            Text(
-                if (bitmap == null) "Not selected" else "\${bitmap.width} × \${bitmap.height}",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        Button(onClick = onPick) { Text(buttonText) }
+private fun TiltControls(value: Float, onChange: (Float) -> Unit) {
+    LabeledSlider("Tilt", value, "${value.toInt()}°", 0f..90f, onChange)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = value == 0f, onClick = { onChange(0f) }, label = { Text("Flat") })
+        FilterChip(selected = value == 90f, onClick = { onChange(90f) }, label = { Text("Upright") })
     }
 }
 
@@ -247,8 +243,12 @@ private fun NativeARScreen(
     targetWidthMeters: Float,
     popupWidthMeters: Float,
     tiltDegrees: Float,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onWidthChange: (Float) -> Unit,
+    onTiltChange: (Float) -> Unit
 ) {
+    BackHandler(onBack = onBack)
+    var showControls by remember { mutableStateOf(false) }
     var trackedImage by remember { mutableStateOf<AugmentedImage?>(null) }
     var status by remember { mutableStateOf("Point camera at trigger") }
     var fpsMode by remember { mutableStateOf("Selecting camera") }
@@ -286,8 +286,8 @@ private fun NativeARScreen(
                 trackedImage = full
                 status = when {
                     frame.camera.trackingState != TrackingState.TRACKING -> "Camera tracking limited"
-                    full != null -> "FULL TRACKING • locked"
-                    else -> "Searching for trigger"
+                    full != null -> "Trigger found"
+                    else -> "Looking for your trigger"
                 }
             },
             onTrackingFailureChanged = { reason ->
@@ -312,7 +312,8 @@ private fun NativeARScreen(
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 28.dp)
+                .statusBarsPadding()
+                .padding(top = 12.dp, start = 20.dp, end = 20.dp)
                 .background(Color(0xCC0A0D08), RoundedCornerShape(20.dp))
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -321,13 +322,23 @@ private fun NativeARScreen(
             Text(fpsMode, style = MaterialTheme.typography.bodySmall)
         }
 
-        Button(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(18.dp),
-            onClick = onBack
-        ) {
-            Text("Back")
+        Surface(modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            color = Color(0xEE111511), shape = RoundedCornerShape(24.dp)) {
+            Column(Modifier.padding(16.dp).heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(if (trackedImage != null) "Move around to explore your AR image." else "Point at the full trigger image. Move slowly in good light.",
+                    style = MaterialTheme.typography.bodySmall)
+                if (showControls) {
+                    LabeledSlider("Image width", popupWidthMeters, "${(popupWidthMeters * 100).toInt()} cm", 0.02f..0.4f, onWidthChange)
+                    TiltControls(tiltDegrees, onTiltChange)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit setup") }
+                    Button(onClick = { showControls = !showControls }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                        Text(if (showControls) "Done" else "Adjust")
+                    }
+                }
+            }
         }
     }
 }
@@ -353,7 +364,9 @@ private fun decodeBitmap(context: Context, uri: Uri): Bitmap? {
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(context.contentResolver, uri)
-            ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                val longest = maxOf(info.size.width, info.size.height)
+                if (longest > 2048) decoder.setTargetSampleSize((longest + 2047) / 2048)
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 decoder.isMutableRequired = false
             }
