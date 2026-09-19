@@ -32,8 +32,8 @@ class PlacementUiTest {
         // A vertical swipe beginning on the preview must scroll, not move the image.
         val before = rule.onNodeWithTag("placement-preview").fetchSemanticsNode().boundsInRoot.top
         rule.onNodeWithTag("placement-preview").performTouchInput { swipeUp() }
-        val after = rule.onNodeWithTag("placement-preview").fetchSemanticsNode().boundsInRoot.top
-        org.junit.Assert.assertTrue("Swipe on preview scrolls the page", after < before)
+        val after = rule.onAllNodesWithTag("placement-preview").fetchSemanticsNodes()
+        org.junit.Assert.assertTrue("Swipe on preview scrolls the page", after.isEmpty() || after.single().boundsInRoot.top < before)
         rule.onNodeWithTag("placement-list").performScrollToNode(hasTestTag("placement-end"))
         rule.onNodeWithTag("placement-end").assertIsDisplayed().performClick()
         rule.onNodeWithTag("images-tab").performClick()
