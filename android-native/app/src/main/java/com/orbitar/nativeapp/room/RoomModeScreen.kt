@@ -2,392 +2,304 @@ package com.orbitar.nativeapp.room
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import android.view.MotionEvent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import com.google.ar.core.Config
-import com.google.ar.core.Frame
-import com.google.ar.core.Plane
-import com.google.ar.core.TrackingState
+import com.google.ar.core.*
 import io.github.sceneview.ar.ARSceneView
-import io.github.sceneview.math.Position
-import io.github.sceneview.math.Rotation
-import io.github.sceneview.math.Size
 import io.github.sceneview.rememberEngine
-import io.github.sceneview.rememberModelInstance
 import io.github.sceneview.rememberModelLoader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.*
 
-private val roomPlacementIds = AtomicLong(1L)
+private val roomPlacementIds=AtomicLong(1L)
+private enum class RoomCommand { PLACE, MOVE, SET_FLOOR }
 
 @Composable
-fun RoomModeScreen(onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
-
-    val context = LocalContext.current
-    val engine = rememberEngine()
-    val modelLoader = rememberModelLoader(engine)
-    val placements = remember { mutableStateListOf<RoomPlacement>() }
-    val latestFrame = remember { arrayOfNulls<Frame>(1) }
-
+fun RoomModeScreen(onBack:()->Unit) {
+    val context=LocalContext.current
+    val scope=rememberCoroutineScope()
+    val engine=rememberEngine()
+    val loader=rememberModelLoader(engine)
+    val scanner=remember { RoomSurfaceScanner() }
+    val placements=remember { mutableStateListOf<RoomPlacement>() }
+    val modelMessages=remember { mutableStateMapOf<Long,String>() }
+    val floor=remember { arrayOfNulls<Anchor>(1) }
+    var hasFloor by remember { mutableStateOf(false) }
+    var viewport by remember { mutableStateOf(IntSize.Zero) }
+    var scan by remember { mutableStateOf(RoomScanUi()) }
+    var mode by remember { mutableStateOf(SurfaceMode.AUTO) }
     var currentAsset by remember { mutableStateOf<RoomAsset?>(null) }
-    var placementArmed by remember { mutableStateOf(false) }
+    var armed by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf(false) }
     var selectedId by remember { mutableStateOf<Long?>(null) }
-    var surfacesFound by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Move around to map the room") }
-    var sessionFailure by remember { mutableStateOf<String?>(null) }
+    var command by remember { mutableStateOf<RoomCommand?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var showTools by remember { mutableStateOf(false) }
+    var showMap by remember { mutableStateOf(true) }
+    var snapCenter by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    var depthEnabled by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmExit by remember { mutableStateOf(false) }
+    val lastScan=remember { longArrayOf(0L) }
+    val down=remember { floatArrayOf(0f,0f) }
+    val tapSlop=with(LocalDensity.current) { 12.dp.toPx() }
+    val selected=placements.firstOrNull { it.id==selectedId }
 
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        val bitmap = decodeRoomBitmap(context, uri)
-        if (bitmap != null) {
-            currentAsset = RoomAsset(RoomAssetType.IMAGE, "Image", bitmap = bitmap)
-            placementArmed = true
-            status = "Tap a detected surface to place the image"
-        } else {
-            status = "Couldn't open that image"
+    fun exit() { if(placements.isEmpty()) onBack() else confirmExit=true }
+    BackHandler { exit() }
+    fun replace(item:RoomPlacement) { val i=placements.indexOfFirst { it.id==item.id };if(i>=0) placements[i]=item }
+    fun clear() {
+        placements.forEach { runCatching { it.anchor.detach() } };placements.clear();modelMessages.clear();selectedId=null
+        moving=false;armed=false;command=null
+    }
+    DisposableEffect(Unit) { onDispose {
+        placements.forEach { runCatching { it.anchor.detach() } }
+        floor[0]?.let { runCatching { it.detach() } }
+    } }
+
+    val imagePicker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if(uri!=null) scope.launch {
+            loading=true;notice=null
+            val asset=withContext(Dispatchers.IO) {
+                decodeRoomBitmap(context,uri)?.let { RoomAsset(RoomAssetType.IMAGE,fileName(context,uri,"Image"),bitmap=it) }
+            }
+            loading=false
+            if(asset==null) notice="Couldn't open that image. Try a JPG or PNG."
+            else { currentAsset=asset;armed=true;moving=false;showTools=false;scanner.reset() }
+        }
+    }
+    val modelPicker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if(uri!=null) scope.launch {
+            loading=true;notice=null
+            val valid=withContext(Dispatchers.IO) { runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val header=ByteArray(4);var count=0
+                    while(count<4) { val n=input.read(header,count,4-count);if(n<0) break;count+=n }
+                    count==4 && header.contentEquals(byteArrayOf(0x67,0x6c,0x54,0x46))
+                }==true
+            }.getOrDefault(false) }
+            loading=false
+            if(!valid) notice="Choose a GLB model (.glb), not a ZIP or separate .gltf file."
+            else { currentAsset=RoomAsset(RoomAssetType.MODEL_GLB,fileName(context,uri,"3D model"),modelUri=uri.toString())
+                armed=true;moving=false;showTools=false;scanner.reset() }
         }
     }
 
-    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        currentAsset = RoomAsset(RoomAssetType.MODEL_GLB, "3D model", modelUri = uri.toString())
-        placementArmed = true
-        status = "Tap a detected surface to place the 3D model"
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            placements.forEach { runCatching { it.anchor.detach() } }
-        }
-    }
-
-    val selected = placements.firstOrNull { it.id == selectedId }
-
-    Box(Modifier.fillMaxSize()) {
-        ARSceneView(
-            modifier = Modifier.fillMaxSize(),
-            engine = engine,
-            modelLoader = modelLoader,
-            sessionCameraConfig = null,
-            planeRenderer = true,
-            planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL,
-            updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE,
-            focusMode = Config.FocusMode.AUTO,
-            onSessionCreated = {
-                sessionFailure = null
-                status = "Move around to map the room"
+    Box(Modifier.fillMaxSize().onSizeChanged { viewport=it }) {
+        ARSceneView(modifier=Modifier.fillMaxSize(),engine=engine,modelLoader=loader,
+            sessionCameraConfig=null,planeRenderer=false,
+            planeFindingMode=Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL,
+            imageStabilizationMode=Config.ImageStabilizationMode.OFF,
+            updateMode=Config.UpdateMode.LATEST_CAMERA_IMAGE,focusMode=Config.FocusMode.AUTO,
+            sessionConfiguration={session,config ->
+                depthEnabled=session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+                config.depthMode=if(depthEnabled) Config.DepthMode.AUTOMATIC else Config.DepthMode.DISABLED
+                config.instantPlacementMode=Config.InstantPlacementMode.DISABLED
             },
-            onSessionFailed = { exception ->
-                val detail = exception.message?.takeIf { it.isNotBlank() }
-                    ?: "No additional details were provided."
-                sessionFailure = "${exception.javaClass.simpleName}: §detail"
-                status = "Couldn't start Room Mode"
-            },
-            onSessionUpdated = { _, frame ->
-                latestFrame[0] = frame
-                if (!surfacesFound) {
-                    val found = frame.getUpdatedTrackables(Plane::class.java).any {
-                        it.trackingState == TrackingState.TRACKING
-                    }
-                    if (found) {
-                        surfacesFound = true
-                        status = if (currentAsset == null) {
-                            "Surfaces ready — choose something to place"
-                        } else {
-                            "Tap a surface to place ${currentAsset?.label?.lowercase()}"
-                        }
-                    }
+            onSessionCreated={ failure=null;scanner.reset() },
+            onSessionFailed={e -> failure="${e.javaClass.simpleName}: ${e.message ?: "Camera could not start"}";command=null;scan=RoomScanUi() },
+            onSessionPaused={ scan=RoomScanUi(message="Camera paused — return to continue");scanner.reset();command=null },
+            onSessionUpdated=update@{session,frame ->
+                if(frame.timestamp-lastScan[0]<100_000_000L && command==null && frame.camera.trackingState==TrackingState.TRACKING) return@update
+                lastScan[0]=frame.timestamp
+                val floorAnchor=floor[0]
+                val floorY=floorAnchor?.takeIf { it.trackingState==TrackingState.TRACKING }?.pose?.ty()
+                hasFloor=floorY!=null
+                val editing=if(moving) placements.firstOrNull {it.id==selectedId} else null
+                val asset=editing?.asset ?: currentAsset
+                val aspect=asset?.bitmap?.let {it.width.toFloat()/it.height} ?: 1f
+                val margin=if(mode==SurfaceMode.TABLE && asset!=null) footprintMargin(editing?.scale ?: 1f,asset.type==RoomAssetType.MODEL_GLB,editing?.flat ?: false,aspect) else 0.02f
+                val target=scanner.target(frame,viewport.width,viewport.height,mode,floorY,margin)
+                scan=scanner.ui(session,frame,target,mode,floorY,showMap)
+                val action=command ?: return@update
+                command=null
+                if(action==RoomCommand.SET_FLOOR) {
+                    if(target?.let {it.horizontal && it.stable && it.safe}==true) {
+                        runCatching { target.plane.createAnchor(target.hit.hitPose) }.onSuccess { anchor ->
+                            floor[0]?.detach();floor[0]=anchor;hasFloor=true;notice="Floor reference set. You can now choose Floor or Tabletop.";scanner.reset()
+                        }.onFailure { notice="Couldn't set the floor. Scan it again." }
+                    } else notice="Aim at a clear floor area and hold steady before setting it."
+                    return@update
                 }
+                if(target==null || !scan.canPlace) { notice="Surface moved or tracking changed. Hold steady and try again.";return@update }
+                if((action==RoomCommand.PLACE && !armed) || (action==RoomCommand.MOVE && (editing==null || !moving))) return@update
+                val assetToPlace=editing?.asset ?: currentAsset ?: return@update
+                if(action==RoomCommand.PLACE && placements.size>=20) { notice="This room already has 20 objects. Delete one before adding another.";return@update }
+                val point=if(snapCenter) Point2(target.polygon.map{it.x}.average().toFloat(),target.polygon.map{it.z}.average().toFloat()) else target.localPoint
+                if(!insideWithMargin(target.polygon,point,margin)) { notice="Not enough mapped surface here. Scan the edges or choose another spot.";return@update }
+                val pose=target.plane.centerPose.compose(Pose.makeTranslation(point.x,0f,point.z))
+                val anchor=runCatching { target.plane.createAnchor(pose) }.getOrElse {notice="Couldn't anchor here. Please try again.";return@update}
+                val edge=target.polygon.indices.maxByOrNull { i -> val a=target.polygon[i];val b=target.polygon[(i+1)%target.polygon.size];hypot(b.x-a.x,b.z-a.z) } ?: 0
+                val a=target.polygon[edge];val b=target.polygon[(edge+1)%target.polygon.size]
+                val edgeYaw=(-atan2(b.z-a.z,b.x-a.x)*180f/PI.toFloat()).coerceIn(-180f,180f)
+                if(action==RoomCommand.MOVE && editing!=null) {
+                    replace(editing.copy(anchor=anchor,elevation=0f,surfaceLabel=target.label,alignmentYaw=edgeYaw))
+                    editing.anchor.detach();notice="Object moved to ${target.label.lowercase()}"
+                } else {
+                    val camera=pose.inverse().compose(frame.camera.pose)
+                    val yaw=if(target.horizontal) atan2(camera.tx(),camera.tz())*180f/PI.toFloat() else 0f
+                    val p=RoomPlacement(roomPlacementIds.getAndIncrement(),anchor,assetToPlace,rotationY=yaw,
+                        flat=!target.horizontal && assetToPlace.type==RoomAssetType.IMAGE,surfaceLabel=target.label,alignmentYaw=edgeYaw)
+                    placements.add(p);selectedId=p.id;notice="Placed on ${target.label.lowercase()}"
+                }
+                armed=false;moving=false;showTools=false
             },
-            onTrackingFailureChanged = { reason ->
-                if (reason != null) status = reason.name.replace('_', ' ')
-            },
-            onTouchEvent = { event, _ ->
-                if (
-                    event.action == MotionEvent.ACTION_UP &&
-                    placementArmed &&
-                    currentAsset != null &&
-                    sessionFailure == null
-                ) {
-                    val frame = latestFrame[0]
-                    val hit = frame?.hitTest(event.x, event.y)?.firstOrNull { candidate ->
-                        val plane = candidate.trackable as? Plane
-                        plane != null &&
-                            plane.trackingState == TrackingState.TRACKING &&
-                            plane.isPoseInPolygon(candidate.hitPose)
+            onTouchEvent={event,hit ->
+                when(event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {down[0]=event.x;down[1]=event.y;false}
+                    MotionEvent.ACTION_UP -> {
+                        if(!armed && !moving && hypot(event.x-down[0],event.y-down[1])<tapSlop) {
+                            val id=generateSequence(hit?.nodeOrNull) {it.parent}.take(10).mapNotNull {it.name?.removePrefix("room-")?.toLongOrNull()}.firstOrNull()
+                            if(id!=null && placements.any{it.id==id}) {selectedId=id;showTools=true;true} else false
+                        } else false
                     }
-
-                    if (hit != null) {
-                        val anchor = runCatching { hit.createAnchor() }.getOrNull()
-                        if (anchor != null) {
-                            val placement = RoomPlacement(
-                                id = roomPlacementIds.getAndIncrement(),
-                                anchor = anchor,
-                                asset = currentAsset!!
-                            )
-                            placements.add(placement)
-                            selectedId = placement.id
-                            placementArmed = false
-                            status = "Placed • ${placements.size} object${if (placements.size == 1) "" else "s"} in room"
-                            true
-                        } else {
-                            status = "Couldn't create an anchor there — try another spot"
-                            false
-                        }
-                    } else {
-                        status = "No mapped surface there yet — move the phone around and try again"
-                        false
-                    }
-                } else false
+                    else -> false
+                }
             }
         ) {
-            placements.forEach { placement ->
-                key(placement.id) {
-                    when (placement.asset.type) {
-                        RoomAssetType.IMAGE -> {
-                            val bitmap = placement.asset.bitmap
-                            if (bitmap != null) {
-                                val aspect = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
-                                val width = 0.24f * placement.scale
-                                val height = width / aspect
-                                AnchorNode(anchor = placement.anchor) {
-                                    ImageNode(
-                                        bitmap = bitmap,
-                                        size = Size(x = width, y = height),
-                                        position = Position(y = height / 2f),
-                                        rotation = Rotation(y = placement.rotationY),
-                                        apply = {
-                                            name = "room-${placement.id}"
-                                            isTouchable = true
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        RoomAssetType.MODEL_GLB -> {
-                            val uri = placement.asset.modelUri
-                            if (uri != null) {
-                                val instance = rememberModelInstance(
-                                    modelLoader = modelLoader,
-                                    fileLocation = uri
-                                )
-                                AnchorNode(anchor = placement.anchor) {
-                                    instance?.let {
-                                        ModelNode(
-                                            modelInstance = it,
-                                            autoAnimate = true,
-                                            scaleToUnits = 0.28f * placement.scale,
-                                            centerOrigin = Position(0f, -1f, 0f),
-                                            rotation = Rotation(y = placement.rotationY),
-                                            isEditable = false,
-                                            apply = {
-                                                name = "room-${placement.id}"
-                                                isTouchable = true
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+            placements.forEach { placement -> key(placement.id) {
+                AnchorNode(anchor=placement.anchor) {
+                    RoomObjectContent(placement) {id,message -> if(message==null) modelMessages.remove(id) else modelMessages[id]=message }
                 }
+            } }
+        }
+
+        Canvas(Modifier.fillMaxSize()) {
+            scan.outlines.forEach { outline ->
+                val path=Path();outline.points.forEachIndexed {i,p -> if(i==0) path.moveTo(p.x*size.width,p.z*size.height) else path.lineTo(p.x*size.width,p.z*size.height)};path.close()
+                val color=if(outline.selected) Color(0xFFB8FF3D) else Color(0xFF75B8EF)
+                drawPath(path,color.copy(alpha=0.06f));drawPath(path,color.copy(alpha=0.75f),style=Stroke(2.dp.toPx()))
+            }
+            val center=Offset(size.width*.5f,size.height*.40f)
+            val color=if(scan.canPlace) Color(0xFFB8FF3D) else Color.White
+            drawCircle(color,14.dp.toPx(),center,style=Stroke(2.dp.toPx()));drawCircle(color,3.dp.toPx(),center)
+        }
+
+        Surface(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),color=Color(0xE6101510),contentColor=Color.White,shape=RoundedCornerShape(20.dp)) {
+            Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    Text("ROOM · v0.7",fontWeight=FontWeight.Black,color=Color(0xFFB8FF3D),modifier=Modifier.weight(1f))
+                    Text(if(depthEnabled) "Depth enabled" else "Plane mapping",style=MaterialTheme.typography.labelSmall)
+                }
+                Text(failure ?: scan.message,style=MaterialTheme.typography.bodySmall)
+                if(failure==null) Text("${scan.targetLabel} · ${scan.surfaceCount} mapped surfaces",style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))
             }
         }
 
-        Surface(
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(14.dp),
-            color = Color(0xDD0A0D08),
-            shape = RoundedCornerShape(22.dp)
-        ) {
-            Column(
-                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("ROOM MODE", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
-                Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                sessionFailure?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        Surface(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp).fillMaxWidth(),
+            color=Color(0xF2101510),contentColor=Color.White,shape=RoundedCornerShape(24.dp)) {
+            Column(Modifier.heightIn(max=if(showTools) 340.dp else 260.dp).verticalScroll(rememberScrollState()).padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Button(onClick={imagePicker.launch("image/*")},enabled=!loading && placements.size<20,modifier=Modifier.weight(1f)) {Text("Add image")}
+                    OutlinedButton(onClick={modelPicker.launch("*/*")},enabled=!loading && placements.size<20,modifier=Modifier.weight(1f)) {Text("Add GLB")}
                 }
-            }
-        }
-
-        Surface(
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp),
-            color = Color(0xF2111511),
-            shape = RoundedCornerShape(26.dp)
-        ) {
-            Column(
-                Modifier.fillMaxWidth().heightIn(max = 430.dp).verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { imagePicker.launch("image/*") }, modifier = Modifier.weight(1f)) {
-                        Text("Add image")
-                    }
-                    Button(onClick = { modelPicker.launch("*/*") }, modifier = Modifier.weight(1f)) {
-                        Text("Add GLB")
+                if(loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if(armed || moving) {
+                    Text(if(moving) "Move selected object" else "Ready: ${currentAsset?.label}",maxLines=1,style=MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        Button(onClick={command=if(moving) RoomCommand.MOVE else RoomCommand.PLACE},enabled=scan.canPlace && failure==null,
+                            modifier=Modifier.weight(1f)) {Text(if(moving) "Move here" else "Place here")}
+                        TextButton(onClick={armed=false;moving=false;command=null}) {Text("Cancel")}
                     }
                 }
-
-                currentAsset?.let { asset ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Ready: ${asset.label}", modifier = Modifier.weight(1f))
-                        FilterChip(
-                            selected = placementArmed,
-                            onClick = { placementArmed = !placementArmed },
-                            label = { Text(if (placementArmed) "Tap to place" else "Place another") }
-                        )
-                    }
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    TextButton(onClick={showTools=!showTools},modifier=Modifier.weight(1f)) {Text(if(showTools) "Hide controls" else "Surfaces & objects (${placements.size})")}
+                    TextButton(onClick={exit()}) {Text("Exit")}
                 }
-
-                if (placements.isNotEmpty()) {
-                    Text("Objects in room: ${placements.size}", fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        placements.takeLast(4).forEach { placement ->
-                            FilterChip(
-                                selected = selectedId == placement.id,
-                                onClick = { selectedId = placement.id },
-                                label = { Text("#${placements.indexOf(placement) + 1}") }
-                            )
+                notice?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=Color(0xFFD8EBC8)) }
+                if(showTools) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        SurfaceMode.entries.forEach { option -> FilterChip(selected=mode==option,onClick={mode=option;scanner.reset();notice=null},label={Text(option.label)}) }
+                    }
+                    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick={command=RoomCommand.SET_FLOOR},enabled=scan.canSetFloor) {Text(if(hasFloor) "Reset floor" else "Set floor")}
+                        Text(if(hasFloor) "Floor reference ready" else "Point at the actual floor first",style=MaterialTheme.typography.bodySmall)
+                    }
+                    Row(verticalAlignment=Alignment.CenterVertically) {
+                        Text("Show mapped boundaries",Modifier.weight(1f));Switch(checked=showMap,onCheckedChange={showMap=it})
+                    }
+                    Row(verticalAlignment=Alignment.CenterVertically) {
+                        Text("Place at mapped surface center",Modifier.weight(1f));Switch(checked=snapCenter,onCheckedChange={snapCenter=it})
+                    }
+                    Text("Scan all table corners. Outlines show observed areas; glass and glossy tops may need a textured mat. Center means the mapped area, which may still be growing.",style=MaterialTheme.typography.bodySmall)
+                    if(placements.isNotEmpty()) {
+                        Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                            placements.forEachIndexed {index,p -> FilterChip(selected=p.id==selectedId,onClick={selectedId=p.id;armed=false;moving=false},label={Text("${index+1} · ${p.asset.label.take(16)}")}) }
                         }
                     }
-                }
-
-                selected?.let { objectToEdit ->
-                    Text("Selected object", fontWeight = FontWeight.Bold)
-                    RoomSlider(
-                        "Rotation",
-                        objectToEdit.rotationY,
-                        -180f..180f,
-                        "${objectToEdit.rotationY.toInt()}°"
-                    ) { value ->
-                        replacePlacement(placements, objectToEdit.copy(rotationY = value))
-                    }
-                    RoomSlider(
-                        "Scale",
-                        objectToEdit.scale,
-                        0.25f..3f,
-                        String.format("%.2f×", objectToEdit.scale)
-                    ) { value ->
-                        replacePlacement(placements, objectToEdit.copy(scale = value))
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            runCatching { objectToEdit.anchor.detach() }
-                            placements.removeAll { it.id == objectToEdit.id }
-                            selectedId = placements.lastOrNull()?.id
-                            status = "Object deleted"
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Delete selected object")
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) {
-                        Text("Exit Room Mode")
-                    }
-                    if (placements.isNotEmpty()) {
-                        OutlinedButton(
-                            onClick = {
-                                placements.forEach { runCatching { it.anchor.detach() } }
-                                placements.clear()
-                                selectedId = null
-                                status = "Room cleared"
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Clear room")
+                    selected?.let {p ->
+                        Text("${p.asset.label} · ${p.surfaceLabel}",fontWeight=FontWeight.Bold)
+                        modelMessages[p.id]?.let {Text(it,color=Color(0xFFFFD79A),style=MaterialTheme.typography.bodySmall)}
+                        RoomTransformControls(p.scale,p.elevation,p.rotationY,p.flat,p.asset.type==RoomAssetType.IMAGE,
+                            onScale={replace(p.copy(scale=it))},onElevation={replace(p.copy(elevation=it))},
+                            onRotation={replace(p.copy(rotationY=it))},onFlat={replace(p.copy(flat=it))})
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick={moving=true;armed=false;showTools=false;scanner.reset()},modifier=Modifier.weight(1f)) {Text("Move")}
+                            OutlinedButton(onClick={replace(p.copy(rotationY=p.alignmentYaw))},modifier=Modifier.weight(1f)) {Text("Align to edge")}
                         }
+                        if(currentAsset!=null) TextButton(onClick={currentAsset=p.asset;armed=true;moving=false;showTools=false;scanner.reset()}) {Text("Place another copy")}
+                        OutlinedButton(onClick={p.anchor.detach();placements.removeAll{it.id==p.id};modelMessages.remove(p.id);selectedId=placements.lastOrNull()?.id;moving=false;notice="Object deleted"},modifier=Modifier.fillMaxWidth()) {Text("Delete selected")}
                     }
+                    if(placements.isNotEmpty()) TextButton(onClick={confirmClear=true}) {Text("Clear room")}
+                    Text("Objects stay anchored during this room session. Exiting clears them.",style=MaterialTheme.typography.bodySmall)
                 }
             }
         }
     }
+    if(confirmClear || confirmExit) AlertDialog(onDismissRequest={confirmClear=false;confirmExit=false},
+        title={Text(if(confirmExit) "Leave this room?" else "Clear all objects?")},
+        text={Text("The ${placements.size} placed objects will be removed from this session.")},
+        confirmButton={TextButton(onClick={if(confirmExit) {confirmExit=false;onBack()} else {clear();confirmClear=false;notice="Room cleared"}}) {Text(if(confirmExit) "Leave room" else "Clear")}},
+        dismissButton={TextButton(onClick={confirmClear=false;confirmExit=false}) {Text("Keep room")}})
 }
 
-@Composable
-private fun RoomSlider(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    valueText: String,
-    onChange: (Float) -> Unit
-) {
-    Column {
-        Row(Modifier.fillMaxWidth()) {
-            Text(label, modifier = Modifier.weight(1f))
-            Text(valueText, fontWeight = FontWeight.Bold)
-        }
-        Slider(value = value, onValueChange = onChange, valueRange = range)
+private fun fileName(context:Context,uri:Uri,fallback:String):String = runCatching {
+    context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use {cursor ->
+        if(cursor.moveToFirst()) cursor.getString(0) else fallback
+    } ?: fallback
+}.getOrDefault(fallback)
+
+private fun decodeRoomBitmap(context:Context,uri:Uri):Bitmap? = runCatching {
+    if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.P) ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver,uri)) {decoder,info,_ ->
+        val longest=maxOf(info.size.width,info.size.height)
+        if(longest>1024) decoder.setTargetSampleSize((longest+1023)/1024)
+        decoder.allocator=ImageDecoder.ALLOCATOR_SOFTWARE
+    } else {
+        val bounds=BitmapFactory.Options().apply {inJustDecodeBounds=true}
+        context.contentResolver.openInputStream(uri)?.use {BitmapFactory.decodeStream(it,null,bounds)}
+        val options=BitmapFactory.Options().apply {inSampleSize=maxOf(1,(maxOf(bounds.outWidth,bounds.outHeight)+1023)/1024)}
+        context.contentResolver.openInputStream(uri)?.use {BitmapFactory.decodeStream(it,null,options)}
     }
-}
-
-private fun replacePlacement(
-    placements: androidx.compose.runtime.snapshots.SnapshotStateList<RoomPlacement>,
-    replacement: RoomPlacement
-) {
-    val index = placements.indexOfFirst { it.id == replacement.id }
-    if (index >= 0) placements[index] = replacement
-}
-
-private fun decodeRoomBitmap(context: Context, uri: Uri): Bitmap? {
-    return try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val source = ImageDecoder.createSource(context.contentResolver, uri)
-            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                val longest = maxOf(info.size.width, info.size.height)
-                if (longest > 2048) decoder.setTargetSampleSize((longest + 2047) / 2048)
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-                decoder.isMutableRequired = false
-            }
-        } else {
-            context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
-        }
-    } catch (_: Exception) {
-        null
-    }
-}
+}.getOrNull()

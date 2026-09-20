@@ -1,0 +1,35 @@
+package com.orbitar.nativeapp
+
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import com.orbitar.nativeapp.room.RoomTransformControls
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+
+class RoomControlsTest {
+    @get:Rule val rule=createAndroidComposeRule<MainActivity>()
+    @Test fun resizingDoesNotChangeHeightAndGroundButtonOnlyChangesHeight() {
+        var scale by mutableFloatStateOf(1f)
+        var elevation by mutableFloatStateOf(0.2f)
+        var rotation by mutableFloatStateOf(0f)
+        rule.activity.runOnUiThread {rule.activity.setContent {MaterialTheme {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                RoomTransformControls(scale,elevation,rotation,false,true,{scale=it},{elevation=it},{rotation=it},{})
+            }
+        }}}
+        rule.onNodeWithTag("room-size").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(2f)}
+        rule.runOnIdle {assertEquals(2f,scale,0.01f);assertEquals(0.2f,elevation,0.001f)}
+        rule.onNodeWithTag("room-height").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(0.5f)}
+        rule.runOnIdle {assertEquals(2f,scale,0.01f);assertEquals(0.5f,elevation,0.001f)}
+        rule.onNodeWithTag("room-ground").performScrollTo().performClick()
+        rule.runOnIdle {assertEquals(0f,elevation,0.001f);assertEquals(2f,scale,0.01f)}
+    }
+}

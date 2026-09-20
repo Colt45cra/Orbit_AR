@@ -20,5 +20,9 @@ data class RoomPlacement(
     val anchor: Anchor,
     val asset: RoomAsset,
     val rotationY: Float = 0f,
-    val scale: Float = 1f
+    val scale: Float = 1f,
+    val elevation: Float = 0f,
+    val flat: Boolean = false,
+    val surfaceLabel: String = "Surface",
+    val alignmentYaw: Float = 0f
 )

@@ -12,8 +12,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0-room-mode"
+        versionCode = 7
+        versionName = "0.7.0-room-surfaces"
     }
 
     buildTypes {
