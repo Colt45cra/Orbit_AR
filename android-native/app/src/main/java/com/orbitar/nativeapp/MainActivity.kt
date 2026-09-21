@@ -154,7 +154,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
     if (showTriggerCrop && triggerBitmap != null) {
         TriggerCropDialog(triggerBitmap!!, onDismiss = { showTriggerCrop = false }) { cropped, widthRatio ->
             triggerBitmap = cropped
-            targetWidthCm = (targetWidthCm * widthRatio).coerceIn(1f, 200f)
+            targetWidthCm = targetWidthCm * widthRatio
             offsetX = 0f
             offsetZ = 0f
             showTriggerCrop = false
@@ -231,7 +231,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
                             OutlinedButton(onClick = { showTriggerCrop = true }, modifier = Modifier.fillMaxWidth().testTag("trim-trigger")) { Text("Trim blank trigger margins") }
                             if (triggerBitmap !== originalTrigger) TextButton(onClick = {
                                 originalTrigger?.let { original ->
-                                    targetWidthCm = (targetWidthCm * original.width / triggerBitmap!!.width).coerceIn(1f, 200f)
+                                    targetWidthCm = targetWidthCm * original.width / triggerBitmap!!.width
                                     triggerBitmap = original
                                     offsetX = 0f; offsetZ = 0f
                                 }
@@ -266,7 +266,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
                     }
                     item { Text("Size & position", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
                     item { Text("Measure the physical area shown in your trigger preview, including any visible margins. The correct width helps recognition and scale.", style = MaterialTheme.typography.bodySmall) }
-                    item { LabeledSlider("Trigger width", targetWidthCm, "${"%.1f".format(targetWidthCm)} cm", 1f..200f) { targetWidthCm = it } }
+                    item { LabeledSlider("Trigger width", targetWidthCm, "${"%.2f".format(targetWidthCm)} cm", minOf(1f, targetWidthCm)..maxOf(200f, targetWidthCm)) { targetWidthCm = it } }
                     item { LabeledSlider("AR image width", popupWidthCm, "${popupWidthCm.toInt()} cm", 2f..40f) { popupWidthCm = it } }
                     item { TiltControls(tiltDegrees) { tiltDegrees = it } }
                     item { LabeledSlider("Left / right", offsetX, "${(offsetX * 100).toInt()} cm", -0.6f..0.6f) { offsetX = it } }
