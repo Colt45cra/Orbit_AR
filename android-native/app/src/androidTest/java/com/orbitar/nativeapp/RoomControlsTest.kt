@@ -27,12 +27,18 @@ class RoomControlsTest {
                 RoomTransformControls(scale,elevation,rotation,false,true,{scale=it},{elevation=it},{rotation=it},{})
             }
         }}}
-        rule.onNodeWithTag("room-size").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(2f)}
+        rule.onNodeWithTag("room-size").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(2f)}
         rule.runOnIdle {assertEquals(2f,scale,0.01f);assertEquals(0.2f,elevation,0.001f)}
         rule.onNodeWithTag("room-height").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(0.5f)}
         rule.runOnIdle {assertEquals(2f,scale,0.01f);assertEquals(0.5f,elevation,0.001f)}
         rule.onNodeWithTag("room-ground").performScrollTo().performClick()
         rule.runOnIdle {assertEquals(0f,elevation,0.001f);assertEquals(2f,scale,0.01f)}
+        rule.onNodeWithTag("room-lower").performScrollTo().performClick()
+        rule.runOnIdle {assertEquals(-0.01f,elevation,0.001f);assertEquals(2f,scale,0.01f)}
+        rule.onNodeWithTag("room-height").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) {it(-0.25f)}
+        rule.runOnIdle {assertEquals(-0.25f,elevation,0.001f)}
+        rule.onNodeWithTag("room-raise").performScrollTo().performClick()
+        rule.runOnIdle {assertEquals(-0.24f,elevation,0.001f)}
     }
 
     @Test fun surfaceModeAndFloorSetupAreDirectlyAccessible() {

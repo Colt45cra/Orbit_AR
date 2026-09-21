@@ -68,6 +68,7 @@ fun RoomModeScreen(onBack:()->Unit) {
     var notice by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var showTools by remember { mutableStateOf(false) }
+    var adjusting by remember { mutableStateOf(false) }
     var showMap by remember { mutableStateOf(true) }
     var snapCenter by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -99,7 +100,7 @@ fun RoomModeScreen(onBack:()->Unit) {
             }
             loading=false
             if(asset==null) notice="Couldn't open that image. Try a JPG or PNG."
-            else { currentAsset=asset;armed=true;moving=false;showTools=false;scanner.reset() }
+            else { currentAsset=asset;armed=true;moving=false;adjusting=false;showTools=false;scanner.reset() }
         }
     }
     val modelPicker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -115,7 +116,7 @@ fun RoomModeScreen(onBack:()->Unit) {
             loading=false
             if(!valid) notice="Choose a GLB model (.glb), not a ZIP or separate .gltf file."
             else { currentAsset=RoomAsset(RoomAssetType.MODEL_GLB,fileName(context,uri,"3D model"),modelUri=uri.toString())
-                armed=true;moving=false;showTools=false;scanner.reset() }
+                armed=true;moving=false;adjusting=false;showTools=false;scanner.reset() }
         }
     }
 
@@ -176,7 +177,7 @@ fun RoomModeScreen(onBack:()->Unit) {
                         flat=!target.horizontal && assetToPlace.type==RoomAssetType.IMAGE,surfaceLabel=target.label,alignmentYaw=edgeYaw)
                     placements.add(p);selectedId=p.id;notice="Placed on ${target.label.lowercase()}"
                 }
-                armed=false;moving=false;showTools=false
+                armed=false;moving=false;showTools=false;adjusting=true
             },
             onTouchEvent={event,hit ->
                 when(event.actionMasked) {
@@ -184,7 +185,7 @@ fun RoomModeScreen(onBack:()->Unit) {
                     MotionEvent.ACTION_UP -> {
                         if(!armed && !moving && hypot(event.x-down[0],event.y-down[1])<tapSlop) {
                             val id=generateSequence(hit?.nodeOrNull) {it.parent}.take(10).mapNotNull {it.name?.removePrefix("room-")?.toLongOrNull()}.firstOrNull()
-                            if(id!=null && placements.any{it.id==id}) {selectedId=id;showTools=true;true} else false
+                            if(id!=null && placements.any{it.id==id}) {selectedId=id;adjusting=true;showTools=false;true} else false
                         } else false
                     }
                     else -> false
@@ -198,7 +199,7 @@ fun RoomModeScreen(onBack:()->Unit) {
             } }
         }
 
-        Canvas(Modifier.fillMaxSize()) {
+        if(!adjusting || armed || moving) Canvas(Modifier.fillMaxSize()) {
             scan.outlines.forEach { outline ->
                 val path=Path();outline.points.forEachIndexed {i,p -> if(i==0) path.moveTo(p.x*size.width,p.z*size.height) else path.lineTo(p.x*size.width,p.z*size.height)};path.close()
                 val color=if(outline.selected) {if(scan.canPlace) Color(0xFFB8FF3D) else Color(0xFFFFCB75)} else Color(0xFF75B8EF)
@@ -229,11 +230,11 @@ fun RoomModeScreen(onBack:()->Unit) {
         Surface(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),color=Color(0xE6101510),contentColor=Color.White,shape=RoundedCornerShape(20.dp)) {
             Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
-                    Text("ROOM · v0.8",fontWeight=FontWeight.Black,color=Color(0xFFB8FF3D),modifier=Modifier.weight(1f))
+                    Text("ROOM · v0.9",fontWeight=FontWeight.Black,color=Color(0xFFB8FF3D),modifier=Modifier.weight(1f))
                     Text(if(depthEnabled) "Depth enabled" else "Plane mapping",style=MaterialTheme.typography.labelSmall)
                 }
-                Text(failure ?: scan.message,style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.SemiBold)
-                if(failure==null) {
+                Text(failure ?: if(adjusting && selected!=null) "Adjust your object — Lower / Raise corrects its height" else scan.message,style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.SemiBold)
+                if(failure==null && !adjusting) {
                     Text("${scan.targetLabel} · ${scan.surfaceCount} mapped surfaces",style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))
                     scan.detail?.let {Text(it,style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))}
                 }
@@ -242,7 +243,21 @@ fun RoomModeScreen(onBack:()->Unit) {
 
         Surface(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp).fillMaxWidth(),
             color=Color(0xF2101510),contentColor=Color.White,shape=RoundedCornerShape(24.dp)) {
-            Column(Modifier.heightIn(max=if(showTools) 340.dp else 300.dp).verticalScroll(rememberScrollState()).padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.heightIn(max=if(showTools || adjusting) 380.dp else 300.dp).verticalScroll(key(adjusting,showTools,selectedId) {rememberScrollState()}).padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                if(adjusting && selected!=null && !armed && !moving) {
+                    Row(verticalAlignment=Alignment.CenterVertically) {
+                        Text(selected.asset.label,Modifier.weight(1f),maxLines=1,fontWeight=FontWeight.Bold)
+                        TextButton(onClick={adjusting=false}) {Text("Done")}
+                    }
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick={moving=true;armed=false;adjusting=false;showTools=false;scanner.reset()},modifier=Modifier.weight(1f)) {Text("Reposition")}
+                        OutlinedButton(onClick={showTools=!showTools},modifier=Modifier.weight(1f)) {Text(if(showTools) "Less" else "More")}
+                    }
+                    modelMessages[selected.id]?.let {Text(it,color=Color(0xFFFFD79A),style=MaterialTheme.typography.bodySmall)}
+                    RoomTransformControls(selected.scale,selected.elevation,selected.rotationY,selected.flat,selected.asset.type==RoomAssetType.IMAGE,
+                        onScale={replace(selected.copy(scale=it))},onElevation={replace(selected.copy(elevation=it))},
+                        onRotation={replace(selected.copy(rotationY=it))},onFlat={replace(selected.copy(flat=it))})
+                } else {
                 RoomScanControls(mode,hasFloor,scan.canSetFloor && failure==null,
                     onMode={mode=it;scanner.reset();notice=null},onSetFloor={command=RoomCommand.SET_FLOOR})
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -263,6 +278,8 @@ fun RoomModeScreen(onBack:()->Unit) {
                     TextButton(onClick={exit()}) {Text("Exit")}
                 }
                 notice?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=Color(0xFFD8EBC8)) }
+                    if(selected!=null && !armed && !moving) Button(onClick={adjusting=true;showTools=false},modifier=Modifier.fillMaxWidth()) {Text("Adjust selected object")}
+                }
                 if(showTools) {
                     Row(verticalAlignment=Alignment.CenterVertically) {
                         Text("Show mapped boundaries",Modifier.weight(1f));Switch(checked=showMap,onCheckedChange={showMap=it})
@@ -273,21 +290,18 @@ fun RoomModeScreen(onBack:()->Unit) {
                     Text("Blue: mapped areas. Amber: keep scanning or move inward. Green: ready. The ring shows placement clearance. Boundaries follow the scanned area; they are not confirmed physical edges. Scan around every table corner. Glass and glossy tops may need a textured mat.",style=MaterialTheme.typography.bodySmall)
                     if(placements.isNotEmpty()) {
                         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                            placements.forEachIndexed {index,p -> FilterChip(selected=p.id==selectedId,onClick={selectedId=p.id;armed=false;moving=false},label={Text("${index+1} · ${p.asset.label.take(16)}")}) }
+                            placements.forEachIndexed {index,p -> FilterChip(selected=p.id==selectedId,onClick={selectedId=p.id;armed=false;moving=false;adjusting=true;showTools=false},label={Text("${index+1} · ${p.asset.label.take(16)}")}) }
                         }
                     }
                     selected?.let {p ->
                         Text("${p.asset.label} · ${p.surfaceLabel}",fontWeight=FontWeight.Bold)
                         modelMessages[p.id]?.let {Text(it,color=Color(0xFFFFD79A),style=MaterialTheme.typography.bodySmall)}
-                        RoomTransformControls(p.scale,p.elevation,p.rotationY,p.flat,p.asset.type==RoomAssetType.IMAGE,
-                            onScale={replace(p.copy(scale=it))},onElevation={replace(p.copy(elevation=it))},
-                            onRotation={replace(p.copy(rotationY=it))},onFlat={replace(p.copy(flat=it))})
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick={moving=true;armed=false;showTools=false;scanner.reset()},modifier=Modifier.weight(1f)) {Text("Move")}
+                            OutlinedButton(onClick={moving=true;armed=false;adjusting=false;showTools=false;scanner.reset()},modifier=Modifier.weight(1f)) {Text("Move")}
                             OutlinedButton(onClick={replace(p.copy(rotationY=p.alignmentYaw))},modifier=Modifier.weight(1f)) {Text("Align to edge")}
                         }
-                        if(currentAsset!=null) TextButton(onClick={currentAsset=p.asset;armed=true;moving=false;showTools=false;scanner.reset()}) {Text("Place another copy")}
-                        OutlinedButton(onClick={p.anchor.detach();placements.removeAll{it.id==p.id};modelMessages.remove(p.id);selectedId=placements.lastOrNull()?.id;moving=false;notice="Object deleted"},modifier=Modifier.fillMaxWidth()) {Text("Delete selected")}
+                        if(currentAsset!=null) TextButton(onClick={currentAsset=p.asset;armed=true;moving=false;adjusting=false;showTools=false;scanner.reset()}) {Text("Place another copy")}
+                        OutlinedButton(onClick={p.anchor.detach();placements.removeAll{it.id==p.id};modelMessages.remove(p.id);selectedId=placements.lastOrNull()?.id;moving=false;adjusting=false;notice="Object deleted"},modifier=Modifier.fillMaxWidth()) {Text("Delete selected")}
                     }
                     if(placements.isNotEmpty()) TextButton(onClick={confirmClear=true}) {Text("Clear room")}
                     Text("Objects stay anchored during this room session. Exiting clears them.",style=MaterialTheme.typography.bodySmall)
