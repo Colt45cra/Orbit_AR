@@ -48,7 +48,7 @@ internal class RoomSurfaceScanner {
         return RoomTarget(hit,plane,horizontal,stable,acceptsSurface(mode,horizontal,above),safe,
             surfaceLabel(horizontal,above),point,polygon,margin)
     }
-    fun ui(session: Session, frame: Frame, target: RoomTarget?, mode: SurfaceMode, floorY: Float?, showMap: Boolean, placing: Boolean = false): RoomScanUi {
+    fun ui(session: Session, frame: Frame, target: RoomTarget?, mode: SurfaceMode, floorY: Float?, showMap: Boolean, placing: Boolean = false, snapCenter: Boolean = false): RoomScanUi {
         val tracking=frame.camera.trackingState==TrackingState.TRACKING
         val planes=if(tracking) session.getAllTrackables(Plane::class.java).filter {
             it.trackingState==TrackingState.TRACKING && it.subsumedBy==null && it.type!=Plane.Type.HORIZONTAL_DOWNWARD_FACING
@@ -68,18 +68,19 @@ internal class RoomSurfaceScanner {
             else -> if(placing) "Surface ready — tap Place here" else "Surface ready — add an image or 3D object"
         }
         val outlines=if(showMap && tracking) outlines(frame,planes.sortedBy { if(it==target?.plane) 0 else 1 }.take(16),target?.plane) else emptyList()
-        val edge=target?.let { nearestBoundary(it.polygon,it.localPoint) }
+        val preview=target?.let {t -> if(snapCenter) Point2(t.polygon.map {it.x}.average().toFloat(),t.polygon.map {it.z}.average().toFloat()) else t.localPoint}
+        val edge=target?.let { nearestBoundary(it.polygon,preview!!) }
         val detail=target?.let { t ->
-            val distance=edge?.let {hypot(it.x-t.localPoint.x,it.z-t.localPoint.z)} ?: 0f
+            val distance=edge?.let {hypot(it.x-preview!!.x,it.z-preview!!.z)} ?: 0f
             String.format(Locale.US,"Mapped %.2f × %.2f m · %.0f cm from boundary",t.plane.extentX,t.plane.extentZ,distance*100)
         }
         val footprint=if(showMap && placing && target!=null) {
-            val ring=(0 until 32).map {i -> val a=i*2*PI/32;Point2(target.localPoint.x+cos(a).toFloat()*target.margin,target.localPoint.z+sin(a).toFloat()*target.margin)}
+            val ring=(0 until 32).map {i -> val a=i*2*PI/32;Point2(preview!!.x+cos(a).toFloat()*target.margin,preview!!.z+sin(a).toFloat()*target.margin)}
             project(frame,target.plane,ring)
         } else emptyList()
         // A short guide points toward the nearest mapped boundary, not an inferred physical edge.
         val guide=if(showMap && target!=null && edge!=null) {
-            val pair=projectPoints(frame,target.plane,listOf(target.localPoint,edge))
+            val pair=projectPoints(frame,target.plane,listOf(preview!!,edge))
             if(pair.all {it.w>0.05f}) pair.map {Point2((it.x/it.w+1f)/2f,(1f-it.y/it.w)/2f)} else emptyList()
         } else emptyList()
         return RoomScanUi(message,target?.label ?: "Looking for a surface",

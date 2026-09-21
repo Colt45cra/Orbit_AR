@@ -144,7 +144,7 @@ fun RoomModeScreen(onBack:()->Unit) {
                 val aspect=asset?.bitmap?.let {it.width.toFloat()/it.height} ?: 1f
                 val margin=if(asset!=null && (armed || moving)) footprintMargin(editing?.scale ?: 1f,asset.type==RoomAssetType.MODEL_GLB,editing?.flat ?: false,aspect) else 0.02f
                 val target=scanner.target(frame,viewport.width,viewport.height,mode,floorY,margin)
-                scan=scanner.ui(session,frame,target,mode,floorY,showMap,armed || moving)
+                scan=scanner.ui(session,frame,target,mode,floorY,showMap,armed || moving,snapCenter)
                 val action=command ?: return@update
                 command=null
                 if(action==RoomCommand.SET_FLOOR) {
