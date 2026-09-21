@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - native-android
+      - recognition-distance
     paths:
       - "android-native/**"
       - ".github/workflows/android-native-apk.yml"

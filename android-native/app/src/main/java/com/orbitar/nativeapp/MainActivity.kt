@@ -67,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.ar.core.AugmentedImage
 import com.google.ar.core.AugmentedImageDatabase
+import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
@@ -107,6 +108,9 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var triggerBitmap by remember { mutableStateOf<Bitmap?>(initialTrigger) }
+    var originalTrigger by remember { mutableStateOf<Bitmap?>(initialTrigger) }
+    var showTriggerCrop by remember { mutableStateOf(false) }
+    var highDetailCamera by rememberSaveable { mutableStateOf(true) }
     var popupBitmap by remember { mutableStateOf<Bitmap?>(initialPopup) }
     var targetWidthCm by rememberSaveable { mutableFloatStateOf(10f) }
     var popupWidthCm by rememberSaveable { mutableFloatStateOf(8f) }
@@ -134,7 +138,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
             loading = true
             error = null
             val bitmap = withContext(Dispatchers.IO) { decodeBitmap(context, uri) }
-            if (bitmap != null) triggerBitmap = bitmap else error = "Couldn't open that image. Try another JPG or PNG."
+            if (bitmap != null) { triggerBitmap = bitmap; originalTrigger = bitmap } else error = "Couldn't open that image. Try another JPG or PNG."
             loading = false
         }
     }
@@ -147,6 +151,15 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
             loading = false
         }
     }
+    if (showTriggerCrop && triggerBitmap != null) {
+        TriggerCropDialog(triggerBitmap!!, onDismiss = { showTriggerCrop = false }) { cropped, widthRatio ->
+            triggerBitmap = cropped
+            targetWidthCm = (targetWidthCm * widthRatio).coerceIn(1f, 200f)
+            offsetX = 0f
+            offsetZ = 0f
+            showTriggerCrop = false
+        }
+    }
     if (roomMode) {
         RoomModeScreen(onBack = { roomMode = false })
         return
@@ -155,7 +168,8 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
     if (runningAr && triggerBitmap != null && popupBitmap != null) {
         NativeARScreen(triggerBitmap!!, popupBitmap!!, targetWidthCm / 100f,
             popupWidthCm / 100f, tiltDegrees, offsetX, offsetZ, onBack = { runningAr = false },
-            onWidthChange = { popupWidthCm = it * 100f }, onTiltChange = { tiltDegrees = it })
+            onWidthChange = { popupWidthCm = it * 100f }, onTiltChange = { tiltDegrees = it },
+            highDetailCamera = highDetailCamera, onStandardCamera = { highDetailCamera = false })
         return
     }
     val ready = triggerBitmap != null && popupBitmap != null && !loading
@@ -188,7 +202,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
             ) {
                 Column(Modifier.weight(1f)) {
                     Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-                    Text("v0.9 · Placement correction", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Text("v0.10 · Trigger recognition", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
                 OutlinedButton(
                     onClick = {
@@ -212,6 +226,28 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
                     contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     item { Text("Choose your two images", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
                     item { PickerCard("01", "Trigger image", "The real image your camera will recognize.", triggerBitmap, !loading) { triggerPicker.launch("image/*") } }
+                    if (triggerBitmap != null) item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { showTriggerCrop = true }, modifier = Modifier.fillMaxWidth().testTag("trim-trigger")) { Text("Trim blank trigger margins") }
+                            if (triggerBitmap !== originalTrigger) TextButton(onClick = {
+                                originalTrigger?.let { original ->
+                                    targetWidthCm = (targetWidthCm * original.width / triggerBitmap!!.width).coerceIn(1f, 200f)
+                                    triggerBitmap = original
+                                    offsetX = 0f; offsetZ = 0f
+                                }
+                            }) { Text("Restore original trigger") }
+                            Text("For longer range: use a larger print with varied, sharp details. Repeating stripes and plain logos are harder to recognize.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("High-detail camera")
+                                Text("Experimental. Uses a higher-resolution camera stream when supported; range still depends on the trigger. Turn off if scanning is slower.", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Switch(checked = highDetailCamera, onCheckedChange = { highDetailCamera = it })
+                        }
+                    }
                     item { PickerCard("02", "AR image", "The image that appears on your trigger. PNG supports transparency.", popupBitmap, !loading) { popupPicker.launch("image/*") } }
                     item {
                         Text("Next: see both images together and place your AR image on the trigger.", modifier = Modifier.testTag("images-end"), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -229,8 +265,8 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
                         } else Text("Choose a trigger and an AR image in the Images tab to preview placement.")
                     }
                     item { Text("Size & position", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-                    item { Text("Measure the printed trigger from left to right. Preview and camera use the same placement.", style = MaterialTheme.typography.bodySmall) }
-                    item { LabeledSlider("Trigger width", targetWidthCm, "${targetWidthCm.toInt()} cm", 4f..60f) { targetWidthCm = it } }
+                    item { Text("Measure the physical area shown in your trigger preview, including any visible margins. The correct width helps recognition and scale.", style = MaterialTheme.typography.bodySmall) }
+                    item { LabeledSlider("Trigger width", targetWidthCm, "${"%.1f".format(targetWidthCm)} cm", 1f..200f) { targetWidthCm = it } }
                     item { LabeledSlider("AR image width", popupWidthCm, "${popupWidthCm.toInt()} cm", 2f..40f) { popupWidthCm = it } }
                     item { TiltControls(tiltDegrees) { tiltDegrees = it } }
                     item { LabeledSlider("Left / right", offsetX, "${(offsetX * 100).toInt()} cm", -0.6f..0.6f) { offsetX = it } }
@@ -304,11 +340,15 @@ private fun NativeARScreen(
     offsetZ: Float,
     onBack: () -> Unit,
     onWidthChange: (Float) -> Unit,
-    onTiltChange: (Float) -> Unit
+    onTiltChange: (Float) -> Unit,
+    highDetailCamera: Boolean,
+    onStandardCamera: () -> Unit
 ) {
     BackHandler(onBack = onBack)
     var showControls by remember { mutableStateOf(false) }
     val detectedImages = remember { mutableStateListOf<AugmentedImage>() }
+    var tracking by remember { mutableStateOf(TriggerTracking.SEARCHING) }
+    var previouslySeen by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Point camera at trigger") }
     var arFailure by remember { mutableStateOf<String?>(null) }
     var sessionKey by remember { mutableIntStateOf(0) }
@@ -321,12 +361,21 @@ private fun NativeARScreen(
             ARSceneView(
                 modifier = Modifier.fillMaxSize(),
                 planeRenderer = false,
-                sessionCameraConfig = null,
+                sessionCameraConfig = if (highDetailCamera) ({ session: Session ->
+                    val current = session.cameraConfig
+                    // Keep the physical camera and 30 fps support; never switch lenses mid-session.
+                    session.getSupportedCameraConfigs(CameraConfigFilter(session))
+                        .filter { it.cameraId == current.cameraId && it.fpsRange.contains(30) }
+                        .maxByOrNull { it.imageSize.width.toLong() * it.imageSize.height }
+                        ?: current
+                }) else null,
                 updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE,
                 focusMode = Config.FocusMode.AUTO,
                 sessionConfiguration = { session, config ->
                 config.planeFindingMode = Config.PlaneFindingMode.DISABLED
                 config.lightEstimationMode = Config.LightEstimationMode.DISABLED
+                config.depthMode = Config.DepthMode.DISABLED
+                config.instantPlacementMode = Config.InstantPlacementMode.DISABLED
                 config.augmentedImageDatabase = AugmentedImageDatabase(session).apply {
                     addImage("orbit-target", triggerBitmap, targetWidthMeters)
                 }
@@ -349,16 +398,19 @@ private fun NativeARScreen(
                             detectedImages.none { it.index == image.index }
                         ) {
                             detectedImages.add(image)
+                            previouslySeen = true
                         }
                     }
 
                     detectedImages.removeAll { it.trackingState == TrackingState.STOPPED }
 
-                    status = when {
-                        frame.camera.trackingState != TrackingState.TRACKING -> "Camera tracking limited"
-                        detectedImages.isNotEmpty() -> "Trigger found"
-                        else -> "Looking for your trigger"
-                    }
+                    tracking = triggerTracking(
+                        cameraTracking = frame.camera.trackingState == TrackingState.TRACKING,
+                        fullTracking = detectedImages.any { it.trackingState == TrackingState.TRACKING && it.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING },
+                        lastKnownPose = detectedImages.any { it.trackingState == TrackingState.TRACKING && it.trackingMethod == AugmentedImage.TrackingMethod.LAST_KNOWN_POSE },
+                        previouslySeen = previouslySeen
+                    )
+                    status = tracking.title
                 },
             onTrackingFailureChanged = { reason ->
                 if (reason != null) status = reason.name.replace('_', ' ')
@@ -389,7 +441,7 @@ private fun NativeARScreen(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(status, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            Text(status, color = if (tracking == TriggerTracking.LOCKED && arFailure == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
             Text(
                 if (arFailure == null) "ARCore native image tracking" else "Session startup failed",
                 style = MaterialTheme.typography.bodySmall,
@@ -402,9 +454,8 @@ private fun NativeARScreen(
             Column(Modifier.padding(16.dp).heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    if (detectedImages.isNotEmpty()) "Move around to explore your AR image."
-                    else if (arFailure != null) "ARCore could not start the camera session."
-                    else "Point at the full trigger image. Move slowly in good light.",
+                    if (arFailure != null) "ARCore could not start the camera session."
+                    else tracking.guidance,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -418,6 +469,8 @@ private fun NativeARScreen(
                         onClick = {
                             arFailure = null
                             detectedImages.clear()
+                            previouslySeen = false
+                            tracking = TriggerTracking.SEARCHING
                             status = "Starting AR…"
                             sessionKey += 1
                         },
@@ -425,6 +478,17 @@ private fun NativeARScreen(
                     ) {
                         Text("Try again")
                     }
+                }
+                if (arFailure != null && highDetailCamera) {
+                    OutlinedButton(onClick = {
+                        onStandardCamera()
+                        arFailure = null
+                        detectedImages.clear()
+                        previouslySeen = false
+                        tracking = TriggerTracking.SEARCHING
+                        status = "Starting standard camera…"
+                        sessionKey += 1
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Try standard camera") }
                 }
                 if (showControls && arFailure == null) {
                     LabeledSlider("Image width", popupWidthMeters, "${(popupWidthMeters * 100).toInt()} cm", 0.02f..0.4f, onWidthChange)
