@@ -188,7 +188,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
             ) {
                 Column(Modifier.weight(1f)) {
                     Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-                    Text("v0.7 · Room surfaces", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Text("v0.8 · Surface scanning", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
                 OutlinedButton(
                     onClick = {

@@ -22,6 +22,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -140,9 +142,9 @@ fun RoomModeScreen(onBack:()->Unit) {
                 val editing=if(moving) placements.firstOrNull {it.id==selectedId} else null
                 val asset=editing?.asset ?: currentAsset
                 val aspect=asset?.bitmap?.let {it.width.toFloat()/it.height} ?: 1f
-                val margin=if(mode==SurfaceMode.TABLE && asset!=null) footprintMargin(editing?.scale ?: 1f,asset.type==RoomAssetType.MODEL_GLB,editing?.flat ?: false,aspect) else 0.02f
+                val margin=if(asset!=null && (armed || moving)) footprintMargin(editing?.scale ?: 1f,asset.type==RoomAssetType.MODEL_GLB,editing?.flat ?: false,aspect) else 0.02f
                 val target=scanner.target(frame,viewport.width,viewport.height,mode,floorY,margin)
-                scan=scanner.ui(session,frame,target,mode,floorY,showMap)
+                scan=scanner.ui(session,frame,target,mode,floorY,showMap,armed || moving)
                 val action=command ?: return@update
                 command=null
                 if(action==RoomCommand.SET_FLOOR) {
@@ -199,28 +201,50 @@ fun RoomModeScreen(onBack:()->Unit) {
         Canvas(Modifier.fillMaxSize()) {
             scan.outlines.forEach { outline ->
                 val path=Path();outline.points.forEachIndexed {i,p -> if(i==0) path.moveTo(p.x*size.width,p.z*size.height) else path.lineTo(p.x*size.width,p.z*size.height)};path.close()
-                val color=if(outline.selected) Color(0xFFB8FF3D) else Color(0xFF75B8EF)
+                val color=if(outline.selected) {if(scan.canPlace) Color(0xFFB8FF3D) else Color(0xFFFFCB75)} else Color(0xFF75B8EF)
                 drawPath(path,color.copy(alpha=0.06f));drawPath(path,color.copy(alpha=0.75f),style=Stroke(2.dp.toPx()))
+            }
+            if(scan.footprint.size>=3) {
+                val path=Path();scan.footprint.forEachIndexed {i,p ->
+                    if(i==0) path.moveTo(p.x*size.width,p.z*size.height) else path.lineTo(p.x*size.width,p.z*size.height)
+                };path.close()
+                val color=if(scan.canPlace) Color(0xFFB8FF3D) else Color(0xFFFFCB75)
+                drawPath(path,color.copy(alpha=.18f));drawPath(path,color,style=Stroke(2.dp.toPx()))
+            }
+            if(scan.edgeGuide.size==2) {
+                val a=scan.edgeGuide[0];val b=scan.edgeGuide[1]
+                drawLine(Color(0xFFFFCB75),Offset(a.x*size.width,a.z*size.height),Offset(b.x*size.width,b.z*size.height),
+                    strokeWidth=2.dp.toPx(),pathEffect=PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(),6.dp.toPx())))
+                drawCircle(Color(0xFFFFCB75),4.dp.toPx(),Offset(b.x*size.width,b.z*size.height))
             }
             val center=Offset(size.width*.5f,size.height*.40f)
             val color=if(scan.canPlace) Color(0xFFB8FF3D) else Color.White
-            drawCircle(color,14.dp.toPx(),center,style=Stroke(2.dp.toPx()));drawCircle(color,3.dp.toPx(),center)
+            drawCircle(Color.Black.copy(alpha=.5f),19.dp.toPx(),center)
+            drawCircle(color.copy(alpha=.35f),16.dp.toPx(),center,style=Stroke(2.dp.toPx()))
+            val radius=16.dp.toPx()
+            drawArc(color,-90f,360f*scan.holdProgress,false,Offset(center.x-radius,center.y-radius),Size(radius*2,radius*2),style=Stroke(3.dp.toPx()))
+            drawCircle(color,3.dp.toPx(),center)
         }
 
         Surface(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),color=Color(0xE6101510),contentColor=Color.White,shape=RoundedCornerShape(20.dp)) {
             Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
-                    Text("ROOM · v0.7",fontWeight=FontWeight.Black,color=Color(0xFFB8FF3D),modifier=Modifier.weight(1f))
+                    Text("ROOM · v0.8",fontWeight=FontWeight.Black,color=Color(0xFFB8FF3D),modifier=Modifier.weight(1f))
                     Text(if(depthEnabled) "Depth enabled" else "Plane mapping",style=MaterialTheme.typography.labelSmall)
                 }
-                Text(failure ?: scan.message,style=MaterialTheme.typography.bodySmall)
-                if(failure==null) Text("${scan.targetLabel} · ${scan.surfaceCount} mapped surfaces",style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))
+                Text(failure ?: scan.message,style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.SemiBold)
+                if(failure==null) {
+                    Text("${scan.targetLabel} · ${scan.surfaceCount} mapped surfaces",style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))
+                    scan.detail?.let {Text(it,style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))}
+                }
             }
         }
 
         Surface(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp).fillMaxWidth(),
             color=Color(0xF2101510),contentColor=Color.White,shape=RoundedCornerShape(24.dp)) {
-            Column(Modifier.heightIn(max=if(showTools) 340.dp else 260.dp).verticalScroll(rememberScrollState()).padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.heightIn(max=if(showTools) 340.dp else 300.dp).verticalScroll(rememberScrollState()).padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                RoomScanControls(mode,hasFloor,scan.canSetFloor && failure==null,
+                    onMode={mode=it;scanner.reset();notice=null},onSetFloor={command=RoomCommand.SET_FLOOR})
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     Button(onClick={imagePicker.launch("image/*")},enabled=!loading && placements.size<20,modifier=Modifier.weight(1f)) {Text("Add image")}
                     OutlinedButton(onClick={modelPicker.launch("*/*")},enabled=!loading && placements.size<20,modifier=Modifier.weight(1f)) {Text("Add GLB")}
@@ -240,20 +264,13 @@ fun RoomModeScreen(onBack:()->Unit) {
                 }
                 notice?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=Color(0xFFD8EBC8)) }
                 if(showTools) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        SurfaceMode.entries.forEach { option -> FilterChip(selected=mode==option,onClick={mode=option;scanner.reset();notice=null},label={Text(option.label)}) }
-                    }
-                    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick={command=RoomCommand.SET_FLOOR},enabled=scan.canSetFloor) {Text(if(hasFloor) "Reset floor" else "Set floor")}
-                        Text(if(hasFloor) "Floor reference ready" else "Point at the actual floor first",style=MaterialTheme.typography.bodySmall)
-                    }
                     Row(verticalAlignment=Alignment.CenterVertically) {
                         Text("Show mapped boundaries",Modifier.weight(1f));Switch(checked=showMap,onCheckedChange={showMap=it})
                     }
                     Row(verticalAlignment=Alignment.CenterVertically) {
                         Text("Place at mapped surface center",Modifier.weight(1f));Switch(checked=snapCenter,onCheckedChange={snapCenter=it})
                     }
-                    Text("Scan all table corners. Outlines show observed areas; glass and glossy tops may need a textured mat. Center means the mapped area, which may still be growing.",style=MaterialTheme.typography.bodySmall)
+                    Text("Blue: mapped areas. Amber: keep scanning or move inward. Green: ready. The ring shows placement clearance. Boundaries follow the scanned area; they are not confirmed physical edges. Scan around every table corner. Glass and glossy tops may need a textured mat.",style=MaterialTheme.typography.bodySmall)
                     if(placements.isNotEmpty()) {
                         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             placements.forEachIndexed {index,p -> FilterChip(selected=p.id==selectedId,onClick={selectedId=p.id;armed=false;moving=false},label={Text("${index+1} · ${p.asset.label.take(16)}")}) }

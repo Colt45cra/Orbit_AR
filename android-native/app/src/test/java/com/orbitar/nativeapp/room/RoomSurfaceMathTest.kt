@@ -43,4 +43,27 @@ class RoomSurfaceMathTest {
         s.update(null,null,2_000_000_000L)
         assertFalse(s.update("floor",p,2_500_000_000L))
     }
+
+    @Test fun floorCrossingCameraIsClippedInsteadOfDiscarded() {
+        val p=clipSurface(listOf(ClipPoint(-.5f,-.5f,0f,1f),ClipPoint(.5f,-.5f,0f,1f),
+            ClipPoint(.5f,.5f,-2f,-1f),ClipPoint(-.5f,.5f,-2f,-1f)))
+        assertTrue(p.size>=3)
+        assertTrue(p.all {it.x.isFinite() && it.z.isFinite() && it.x in 0f..1f && it.z in 0f..1f})
+        assertTrue(clipSurface(listOf(ClipPoint(-1f,0f,0f,-1f),ClipPoint(1f,0f,0f,-1f),ClipPoint(0f,1f,0f,-1f))).isEmpty())
+    }
+    @Test fun nearestEdgeIsOnTheSegmentAndWindingIndependent() {
+        val point=Point2(.4f,.1f)
+        val near=nearestBoundary(square,point)!!
+        assertEquals(.5f,near.x,.0001f); assertEquals(.1f,near.z,.0001f)
+        val edge=nearestBoundary(square.reversed(),Point2(.8f,.8f))!!
+        assertEquals(.5f,edge.x,.0001f); assertEquals(.5f,edge.z,.0001f)
+    }
+    @Test fun holdProgressResetsOnTrackingLoss() {
+        val s=AimStability();val p=Point3(0f,0f,0f)
+        s.update("floor",p,1_000_000_000L)
+        s.update("floor",p,1_175_000_000L)
+        assertEquals(.5f,s.progress,.001f)
+        s.update(null,null,1_200_000_000L)
+        assertEquals(0f,s.progress,.001f)
+    }
 }

@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.orbitar.nativeapp.room.RoomTransformControls
+import com.orbitar.nativeapp.room.RoomScanControls
+import com.orbitar.nativeapp.room.SurfaceMode
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -31,5 +33,19 @@ class RoomControlsTest {
         rule.runOnIdle {assertEquals(2f,scale,0.01f);assertEquals(0.5f,elevation,0.001f)}
         rule.onNodeWithTag("room-ground").performScrollTo().performClick()
         rule.runOnIdle {assertEquals(0f,elevation,0.001f);assertEquals(2f,scale,0.01f)}
+    }
+
+    @Test fun surfaceModeAndFloorSetupAreDirectlyAccessible() {
+        var mode by mutableStateOf(SurfaceMode.AUTO)
+        var ready by mutableStateOf(false)
+        var setFloor=false
+        rule.activity.runOnUiThread {rule.activity.setContent {MaterialTheme {
+            RoomScanControls(mode,false,ready,{mode=it},{setFloor=true})
+        }}}
+        rule.onNodeWithTag("surface-TABLE").performClick().assertIsSelected()
+        rule.onNodeWithTag("set-floor").assertIsDisplayed().assertIsNotEnabled()
+        rule.runOnIdle {ready=true}
+        rule.onNodeWithTag("set-floor").performClick()
+        rule.runOnIdle {assertTrue(setFloor);assertEquals(SurfaceMode.TABLE,mode)}
     }
 }
