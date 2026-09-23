@@ -12,8 +12,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.11.0-depth-surfaces"
+        versionCode = 12
+        versionName = "0.12.0-hybrid-tracking"
     }
 
     buildTypes {

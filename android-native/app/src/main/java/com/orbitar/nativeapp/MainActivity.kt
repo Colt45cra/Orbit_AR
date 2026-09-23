@@ -49,6 +49,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.DisposableEffect
+import com.google.ar.core.Anchor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -202,7 +204,7 @@ internal fun OrbitNativeApp(initialTrigger: Bitmap? = null, initialPopup: Bitmap
             ) {
                 Column(Modifier.weight(1f)) {
                     Text("ORBIT AR", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-                    Text("v0.11 · Depth surfaces", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Text("v0.12 · Hybrid tracking", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
                 OutlinedButton(
                     onClick = {
@@ -353,6 +355,18 @@ private fun NativeARScreen(
     var arFailure by remember { mutableStateOf<String?>(null) }
     var sessionKey by remember { mutableIntStateOf(0) }
 
+    var anchorInRoom by remember { mutableStateOf(true) }
+    var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
+    var anchorTracking by remember { mutableStateOf(false) }
+    var triggerVisible by remember { mutableStateOf(false) }
+    var realigning by remember { mutableStateOf(false) }
+    val lockGate=remember { TriggerAnchorGate() }
+    fun clearAnchor() {
+        roomAnchor?.let {runCatching {it.detach()}};roomAnchor=null
+        anchorTracking=false;triggerVisible=false;realigning=false;lockGate.requestLock()
+    }
+    DisposableEffect(Unit) {onDispose {roomAnchor?.let {runCatching {it.detach()}}}}
+
     val popupAspect = popupBitmap.width.toFloat() / popupBitmap.height.coerceAtLeast(1)
     val popupHeightMeters = popupWidthMeters / popupAspect
 
@@ -381,16 +395,19 @@ private fun NativeARScreen(
                 }
                 },
                 onSessionCreated = {
+                    clearAnchor();detectedImages.clear();previouslySeen=false
                     arFailure = null
                     status = "Point camera at trigger"
                 },
                 onSessionFailed = { exception ->
+                    clearAnchor()
                     detectedImages.clear()
                     status = "Couldn't start AR"
                     val detail = exception.message?.takeIf { it.isNotBlank() } ?: "No additional details were provided."
                     arFailure = "${exception.javaClass.simpleName}: $detail"
                 },
-                onSessionUpdated = { _, frame ->
+                onSessionPaused = {anchorTracking=false;triggerVisible=false;lockGate.loseObservation();status="Camera paused"},
+                onSessionUpdated = { session, frame ->
                     frame.getUpdatedTrackables(AugmentedImage::class.java).forEach { image ->
                         if (
                             image.trackingState == TrackingState.TRACKING &&
@@ -410,23 +427,40 @@ private fun NativeARScreen(
                         lastKnownPose = detectedImages.any { it.trackingState == TrackingState.TRACKING && it.trackingMethod == AugmentedImage.TrackingMethod.LAST_KNOWN_POSE },
                         previouslySeen = previouslySeen
                     )
-                    status = tracking.title
+                    val visible=detectedImages.firstOrNull {it.trackingState==TrackingState.TRACKING && it.trackingMethod==AugmentedImage.TrackingMethod.FULL_TRACKING}
+                    triggerVisible=visible!=null && frame.camera.trackingState==TrackingState.TRACKING
+                    if(anchorInRoom) {
+                        val pose=visible?.centerPose?.takeIf {triggerVisible}
+                        val values=pose?.let {it.translation+it.rotationQuaternion}
+                        if(lockGate.update(values,frame.timestamp) && pose!=null) {
+                            runCatching {session.createAnchor(pose)}.onSuccess {newAnchor ->
+                                val old=roomAnchor;roomAnchor=newAnchor;old?.let {runCatching {it.detach()}}
+                                lockGate.locked();realigning=false
+                            }.onFailure {lockGate.loseObservation()}
+                        }
+                        anchorTracking=frame.camera.trackingState==TrackingState.TRACKING && roomAnchor?.trackingState==TrackingState.TRACKING
+                        status=when {
+                            realigning -> "Hold trigger steady to realign"
+                            roomAnchor!=null && anchorTracking -> "Anchored in room"
+                            roomAnchor!=null -> "Room tracking paused — look around slowly"
+                            triggerVisible -> "Trigger found — hold steady to anchor"
+                            else -> "Scan trigger once to anchor"
+                        }
+                    } else status=tracking.title
                 },
             onTrackingFailureChanged = { reason ->
                 if (reason != null) status = reason.name.replace('_', ' ')
             }
         ) {
-            detectedImages.forEach { image ->
-                AugmentedImageNode(
-                    augmentedImage = image,
-                    applyImageScale = false
-                ) {
-                    ImageNode(
-                        bitmap = popupBitmap,
-                        size = Size(x = popupWidthMeters, y = popupHeightMeters),
-                        position = placementCenter(popupHeightMeters, tiltDegrees, offsetX, offsetZ).let { Position(it.x, it.y, it.z) },
-                        rotation = Rotation(x = tiltDegrees - 90f)
-                    )
+            if(anchorInRoom) {
+                roomAnchor?.takeIf {anchorTracking}?.let {anchor ->
+                    key(anchor) {AnchorNode(anchor=anchor) {TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ)}}
+                }
+            } else {
+                detectedImages.filter {it.trackingState==TrackingState.TRACKING && it.trackingMethod==AugmentedImage.TrackingMethod.FULL_TRACKING}.forEach {image ->
+                    AugmentedImageNode(augmentedImage=image,applyImageScale=false) {
+                        TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ)
+                    }
                 }
             }
         }
@@ -441,24 +475,33 @@ private fun NativeARScreen(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(status, color = if (tracking == TriggerTracking.LOCKED && arFailure == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+            Text(status, color = if ((anchorTracking || tracking == TriggerTracking.LOCKED) && arFailure == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
             Text(
-                if (arFailure == null) "ARCore native image tracking" else "Session startup failed",
+                if (arFailure != null) "Session startup failed" else if(anchorInRoom) "Trigger placement · room tracking" else "Follow moving trigger",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
         Surface(modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
-            color = Color(0xEE111511), shape = RoundedCornerShape(24.dp)) {
+            color = Color(0xEE111511), contentColor=Color.White, shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.padding(16.dp).heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     if (arFailure != null) "ARCore could not start the camera session."
-                    else tracking.guidance,
+                    else if(anchorInRoom) {
+                        if(roomAnchor==null) "Keep the trigger still briefly. Content will stay in this room even when the trigger leaves view."
+                        else "The content stays here if the trigger moves. Show the trigger and tap Realign to move it. Anchors last until you leave this AR session."
+                    } else "Content follows the visible trigger. Show it again when recognition is lost.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                if(arFailure==null) {
+                    TriggerModeControls(anchorInRoom,triggerVisible && roomAnchor!=null && !realigning,
+                        onMode={useRoom -> if(useRoom!=anchorInRoom) {clearAnchor();anchorInRoom=useRoom}},
+                        onRealign={lockGate.requestLock();realigning=true})
+                    if(realigning) TextButton(onClick={lockGate.locked();realigning=false}) {Text("Cancel realignment")}
+                }
                 arFailure?.let { failure ->
                     Text(
                         failure,
@@ -468,6 +511,7 @@ private fun NativeARScreen(
                     Button(
                         onClick = {
                             arFailure = null
+                            clearAnchor()
                             detectedImages.clear()
                             previouslySeen = false
                             tracking = TriggerTracking.SEARCHING
@@ -483,6 +527,7 @@ private fun NativeARScreen(
                     OutlinedButton(onClick = {
                         onStandardCamera()
                         arFailure = null
+                        clearAnchor()
                         detectedImages.clear()
                         previouslySeen = false
                         tracking = TriggerTracking.SEARCHING
