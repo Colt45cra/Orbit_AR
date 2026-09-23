@@ -27,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Image
@@ -50,6 +51,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import com.google.ar.core.Anchor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -357,15 +359,31 @@ private fun NativeARScreen(
 
     var anchorInRoom by remember { mutableStateOf(true) }
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
+    var retiredAnchor by remember { mutableStateOf<Anchor?>(null) }
     var anchorTracking by remember { mutableStateOf(false) }
     var triggerVisible by remember { mutableStateOf(false) }
     var realigning by remember { mutableStateOf(false) }
     val lockGate=remember { TriggerAnchorGate() }
     fun clearAnchor() {
         roomAnchor?.let {runCatching {it.detach()}};roomAnchor=null
+        retiredAnchor?.let {runCatching {it.detach()}};retiredAnchor=null
         anchorTracking=false;triggerVisible=false;realigning=false;lockGate.requestLock()
     }
-    DisposableEffect(Unit) {onDispose {roomAnchor?.let {runCatching {it.detach()}}}}
+    LaunchedEffect(retiredAnchor) {
+        val oldAnchor = retiredAnchor ?: return@LaunchedEffect
+        // Let Compose/SceneView switch to the replacement AnchorNode before detaching
+        // the previous ARCore anchor. Detaching it in the same AR frame can leave the
+        // renderer briefly holding a detached anchor during explicit realignment.
+        delay(150)
+        if (oldAnchor !== roomAnchor) runCatching { oldAnchor.detach() }
+        if (retiredAnchor === oldAnchor) retiredAnchor = null
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            roomAnchor?.let {runCatching {it.detach()}}
+            retiredAnchor?.let {runCatching {it.detach()}}
+        }
+    }
 
     val popupAspect = popupBitmap.width.toFloat() / popupBitmap.height.coerceAtLeast(1)
     val popupHeightMeters = popupWidthMeters / popupAspect
@@ -434,7 +452,9 @@ private fun NativeARScreen(
                         val values=pose?.let {it.translation+it.rotationQuaternion}
                         if(lockGate.update(values,frame.timestamp) && pose!=null) {
                             runCatching {session.createAnchor(pose)}.onSuccess {newAnchor ->
-                                val old=roomAnchor;roomAnchor=newAnchor;old?.let {runCatching {it.detach()}}
+                                val old=roomAnchor
+                                roomAnchor=newAnchor
+                                if(old!=null && old!==newAnchor) retiredAnchor=old
                                 lockGate.locked();realigning=false
                             }.onFailure {lockGate.loseObservation()}
                         }
