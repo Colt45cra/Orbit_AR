@@ -453,8 +453,8 @@ private fun NativeARScreen(
             }
         ) {
             if(anchorInRoom) {
-                roomAnchor?.takeIf {anchorTracking}?.let {anchor ->
-                    key(anchor) {AnchorNode(anchor=anchor) {TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ)}}
+                roomAnchor?.let {anchor ->
+                    key(anchor) {AnchorNode(anchor=anchor) {if(anchorTracking) TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ)}}
                 }
             } else {
                 detectedImages.filter {it.trackingState==TrackingState.TRACKING && it.trackingMethod==AugmentedImage.TrackingMethod.FULL_TRACKING}.forEach {image ->
