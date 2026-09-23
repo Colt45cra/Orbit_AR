@@ -70,7 +70,6 @@ fun RoomModeScreen(onBack:()->Unit) {
     var showTools by remember { mutableStateOf(false) }
     var adjusting by remember { mutableStateOf(false) }
     var showMap by remember { mutableStateOf(true) }
-    var snapCenter by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
     var depthEnabled by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -136,6 +135,7 @@ fun RoomModeScreen(onBack:()->Unit) {
             onSessionPaused={ scan=RoomScanUi(message="Camera paused — return to continue");scanner.reset();command=null },
             onSessionUpdated=update@{session,frame ->
                 if(frame.timestamp-lastScan[0]<100_000_000L && command==null && frame.camera.trackingState==TrackingState.TRACKING) return@update
+                if(adjusting && !armed && !moving && command==null) return@update
                 lastScan[0]=frame.timestamp
                 val floorAnchor=floor[0]
                 val floorY=floorAnchor?.takeIf { it.trackingState==TrackingState.TRACKING }?.pose?.ty()
@@ -144,8 +144,8 @@ fun RoomModeScreen(onBack:()->Unit) {
                 val asset=editing?.asset ?: currentAsset
                 val aspect=asset?.bitmap?.let {it.width.toFloat()/it.height} ?: 1f
                 val margin=if(asset!=null && (armed || moving)) footprintMargin(editing?.scale ?: 1f,asset.type==RoomAssetType.MODEL_GLB,editing?.flat ?: false,aspect) else 0.02f
-                val target=scanner.target(frame,viewport.width,viewport.height,mode,floorY,margin)
-                scan=scanner.ui(session,frame,target,mode,floorY,showMap,armed || moving,snapCenter)
+                val target=scanner.target(frame,viewport.width,viewport.height,mode,floorY,margin,depthEnabled)
+                scan=scanner.ui(session,frame,target,mode,floorY,showMap,armed || moving)
                 val action=command ?: return@update
                 command=null
                 if(action==RoomCommand.SET_FLOOR) {
@@ -160,7 +160,7 @@ fun RoomModeScreen(onBack:()->Unit) {
                 if((action==RoomCommand.PLACE && !armed) || (action==RoomCommand.MOVE && (editing==null || !moving))) return@update
                 val assetToPlace=editing?.asset ?: currentAsset ?: return@update
                 if(action==RoomCommand.PLACE && placements.size>=20) { notice="This room already has 20 objects. Delete one before adding another.";return@update }
-                val point=if(snapCenter) Point2(target.polygon.map{it.x}.average().toFloat(),target.polygon.map{it.z}.average().toFloat()) else target.localPoint
+                val point=target.localPoint
                 if(!insideWithMargin(target.polygon,point,margin)) { notice="Not enough mapped surface here. Scan the edges or choose another spot.";return@update }
                 val pose=target.plane.centerPose.compose(Pose.makeTranslation(point.x,0f,point.z))
                 val anchor=runCatching { target.plane.createAnchor(pose) }.getOrElse {notice="Couldn't anchor here. Please try again.";return@update}
@@ -200,10 +200,17 @@ fun RoomModeScreen(onBack:()->Unit) {
         }
 
         if(!adjusting || armed || moving) Canvas(Modifier.fillMaxSize()) {
+            val patch=scan.depthPatch
+            val patchColor=if(scan.canPlace) Color(0xFFB8FF3D) else Color(0xFFFFCB75)
+            patch.cells.forEach {p -> drawRect(patchColor.copy(alpha=.13f),Offset(p.x*size.width,p.z*size.height),Size(size.width/patch.columns+1,size.height/patch.rows+1)) }
+            patch.edges.forEach {edge ->
+                drawLine(patchColor,Offset(edge.a.x*size.width,edge.a.z*size.height),Offset(edge.b.x*size.width,edge.b.z*size.height),
+                    strokeWidth=2.dp.toPx(),pathEffect=if(edge.supported) null else PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(),4.dp.toPx())))
+            }
             scan.outlines.forEach { outline ->
                 val path=Path();outline.points.forEachIndexed {i,p -> if(i==0) path.moveTo(p.x*size.width,p.z*size.height) else path.lineTo(p.x*size.width,p.z*size.height)};path.close()
                 val color=if(outline.selected) {if(scan.canPlace) Color(0xFFB8FF3D) else Color(0xFFFFCB75)} else Color(0xFF75B8EF)
-                drawPath(path,color.copy(alpha=0.06f));drawPath(path,color.copy(alpha=0.75f),style=Stroke(2.dp.toPx()))
+                drawPath(path,color.copy(alpha=0.06f));drawPath(path,color.copy(alpha=0.75f),style=Stroke(2.dp.toPx(),pathEffect=PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(),6.dp.toPx()))))
             }
             if(scan.footprint.size>=3) {
                 val path=Path();scan.footprint.forEachIndexed {i,p ->
@@ -230,12 +237,12 @@ fun RoomModeScreen(onBack:()->Unit) {
         Surface(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),color=Color(0xE6101510),contentColor=Color.White,shape=RoundedCornerShape(20.dp)) {
             Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
-                    Text("ROOM · v0.9",fontWeight=FontWeight.Black,color=Color(0xFFB8FF3D),modifier=Modifier.weight(1f))
+                    Text("ROOM · v0.11",fontWeight=FontWeight.Black,color=Color(0xFFB8FF3D),modifier=Modifier.weight(1f))
                     Text(if(depthEnabled) "Depth enabled" else "Plane mapping",style=MaterialTheme.typography.labelSmall)
                 }
                 Text(failure ?: if(adjusting && selected!=null) "Adjust your object — Lower / Raise corrects its height" else scan.message,style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.SemiBold)
                 if(failure==null && !adjusting) {
-                    Text("${scan.targetLabel} · ${scan.surfaceCount} mapped surfaces",style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))
+                    Text(scan.targetLabel,style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))
                     scan.detail?.let {Text(it,style=MaterialTheme.typography.labelSmall,color=Color(0xFFC7D2C2))}
                 }
             }
@@ -247,7 +254,7 @@ fun RoomModeScreen(onBack:()->Unit) {
                 if(adjusting && selected!=null && !armed && !moving) {
                     Row(verticalAlignment=Alignment.CenterVertically) {
                         Text(selected.asset.label,Modifier.weight(1f),maxLines=1,fontWeight=FontWeight.Bold)
-                        TextButton(onClick={adjusting=false}) {Text("Done")}
+                        TextButton(onClick={adjusting=false;scanner.reset()}) {Text("Done")}
                     }
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick={moving=true;armed=false;adjusting=false;showTools=false;scanner.reset()},modifier=Modifier.weight(1f)) {Text("Reposition")}
@@ -284,10 +291,7 @@ fun RoomModeScreen(onBack:()->Unit) {
                     Row(verticalAlignment=Alignment.CenterVertically) {
                         Text("Show mapped boundaries",Modifier.weight(1f));Switch(checked=showMap,onCheckedChange={showMap=it})
                     }
-                    Row(verticalAlignment=Alignment.CenterVertically) {
-                        Text("Place at mapped surface center",Modifier.weight(1f));Switch(checked=snapCenter,onCheckedChange={snapCenter=it})
-                    }
-                    Text("Blue: mapped areas. Amber: keep scanning or move inward. Green: ready. The ring shows placement clearance. Boundaries follow the scanned area; they are not confirmed physical edges. Scan around every table corner. Glass and glossy tops may need a textured mat.",style=MaterialTheme.typography.bodySmall)
+                    Text("Only the aimed surface is shown. Shading follows depth measurements; furniture and gaps are excluded where depth detects them. Dashed edges are uncertain. Amber means keep scanning; green means placement is ready. For Floor, set a reference on the actual floor. Tabletop works without floor setup. Glass and reflective surfaces may not scan reliably.",style=MaterialTheme.typography.bodySmall)
                     if(placements.isNotEmpty()) {
                         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             placements.forEachIndexed {index,p -> FilterChip(selected=p.id==selectedId,onClick={selectedId=p.id;armed=false;moving=false;adjusting=true;showTools=false},label={Text("${index+1} · ${p.asset.label.take(16)}")}) }

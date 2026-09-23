@@ -20,9 +20,9 @@ internal fun RoomScanControls(mode: SurfaceMode, hasFloor: Boolean, canSetFloor:
                     modifier=Modifier.testTag("surface-${option.name}"),label={Text(option.label)})
             }
         }
-        if(!hasFloor || mode==SurfaceMode.FLOOR || mode==SurfaceMode.TABLE) {
+        if(mode==SurfaceMode.FLOOR) {
             Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                Text(if(hasFloor) "Floor reference set" else "Start here: aim at the floor",
+                Text(if(hasFloor) "Floor reference set" else "Aim at the actual floor to calibrate",
                     modifier=Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick=onSetFloor,enabled=canSetFloor,modifier=Modifier.testTag("set-floor")) {
                     Text(if(hasFloor) "Reset floor" else "Set floor")

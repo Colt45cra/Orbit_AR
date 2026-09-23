@@ -15,9 +15,9 @@ internal fun surfaceLabel(horizontal: Boolean, heightAboveFloor: Float?): String
     else -> "Raised surface"
 }
 internal fun acceptsSurface(mode: SurfaceMode, horizontal: Boolean, heightAboveFloor: Float?): Boolean = when(mode) {
-    SurfaceMode.AUTO -> horizontal
+    SurfaceMode.AUTO -> true
     SurfaceMode.FLOOR -> horizontal && heightAboveFloor != null && abs(heightAboveFloor) <= 0.15f
-    SurfaceMode.TABLE -> horizontal && heightAboveFloor != null && heightAboveFloor in 0.30f..1.50f
+    SurfaceMode.TABLE -> horizontal && (heightAboveFloor == null || heightAboveFloor in 0.30f..1.50f)
     SurfaceMode.WALL -> !horizontal
 }
 

@@ -6,7 +6,9 @@ class RoomSurfaceMathTest {
     private val square=listOf(Point2(-0.5f,-0.5f),Point2(0.5f,-0.5f),Point2(0.5f,0.5f),Point2(-0.5f,0.5f))
     @Test fun floorsAndTablesNeedAnExplicitReference() {
         assertFalse(acceptsSurface(SurfaceMode.FLOOR,true,null))
-        assertFalse(acceptsSurface(SurfaceMode.TABLE,true,null))
+        assertTrue(acceptsSurface(SurfaceMode.TABLE,true,null))
+        assertTrue(acceptsSurface(SurfaceMode.AUTO,false,null))
+        assertFalse(acceptsSurface(SurfaceMode.TABLE,false,null))
         assertTrue(acceptsSurface(SurfaceMode.AUTO,true,null))
         assertTrue(acceptsSurface(SurfaceMode.FLOOR,true,0.05f))
         assertFalse(acceptsSurface(SurfaceMode.TABLE,true,0.05f))

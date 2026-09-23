@@ -49,9 +49,11 @@ class RoomControlsTest {
             RoomScanControls(mode,false,ready,{mode=it},{setFloor=true})
         }}}
         rule.onNodeWithTag("surface-TABLE").performClick().assertIsSelected()
+        rule.onNodeWithTag("set-floor").assertDoesNotExist()
+        rule.onNodeWithTag("surface-FLOOR").performClick().assertIsSelected()
         rule.onNodeWithTag("set-floor").assertIsDisplayed().assertIsNotEnabled()
         rule.runOnIdle {ready=true}
         rule.onNodeWithTag("set-floor").performClick()
-        rule.runOnIdle {assertTrue(setFloor);assertEquals(SurfaceMode.TABLE,mode)}
+        rule.runOnIdle {assertTrue(setFloor);assertEquals(SurfaceMode.FLOOR,mode)}
     }
 }

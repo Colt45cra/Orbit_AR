@@ -12,8 +12,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.9.0-placement-correction"
+        versionCode = 11
+        versionName = "0.11.0-depth-surfaces"
     }
 
     buildTypes {
