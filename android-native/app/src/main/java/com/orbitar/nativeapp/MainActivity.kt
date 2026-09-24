@@ -363,6 +363,7 @@ private fun NativeARScreen(
     var anchorTracking by remember { mutableStateOf(false) }
     var triggerVisible by remember { mutableStateOf(false) }
     var realigning by remember { mutableStateOf(false) }
+    var manualHeightMeters by remember { mutableFloatStateOf(0f) }
     val lockGate=remember { TriggerAnchorGate() }
     fun clearAnchor() {
         roomAnchor?.let {runCatching {it.detach()}};roomAnchor=null
@@ -474,12 +475,12 @@ private fun NativeARScreen(
         ) {
             if(anchorInRoom) {
                 roomAnchor?.let {anchor ->
-                    key(anchor) {AnchorNode(anchor=anchor) {if(anchorTracking) TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ)}}
+                    key(anchor) {AnchorNode(anchor=anchor) {if(anchorTracking) TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ,manualHeightMeters)}}
                 }
             } else {
                 detectedImages.filter {it.trackingState==TrackingState.TRACKING && it.trackingMethod==AugmentedImage.TrackingMethod.FULL_TRACKING}.forEach {image ->
                     AugmentedImageNode(augmentedImage=image,applyImageScale=false) {
-                        TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ)
+                        TriggerContent(popupBitmap,popupWidthMeters,tiltDegrees,offsetX,offsetZ,manualHeightMeters)
                     }
                 }
             }
@@ -517,10 +518,36 @@ private fun NativeARScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 if(arFailure==null) {
-                    TriggerModeControls(anchorInRoom,triggerVisible && roomAnchor!=null && !realigning,
+                    TriggerModeControls(anchorInRoom,false,
                         onMode={useRoom -> if(useRoom!=anchorInRoom) {clearAnchor();anchorInRoom=useRoom}},
-                        onRealign={lockGate.requestLock();realigning=true})
-                    if(realigning) TextButton(onClick={lockGate.locked();realigning=false}) {Text("Cancel realignment")}
+                        onRealign={})
+                    if(anchorInRoom && roomAnchor!=null) {
+                        Text(
+                            "Height " + String.format("%.1f", manualHeightMeters * 100f) + " cm",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Slider(
+                            value = manualHeightMeters,
+                            onValueChange = { manualHeightMeters = it },
+                            valueRange = -1.0f..1.0f,
+                            modifier = Modifier.fillMaxWidth().testTag("hybrid-height")
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Lower", style = MaterialTheme.typography.labelSmall)
+                            TextButton(onClick = { manualHeightMeters = 0f }) { Text("Reset height") }
+                            Text("Higher", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Text(
+                            "Realign is temporarily disabled in this build. Use Height to move the anchored content straight up or down without changing depth or tilt.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 arFailure?.let { failure ->
                     Text(
