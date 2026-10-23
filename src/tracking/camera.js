@@ -30,8 +30,8 @@ export function installOrbitCamera(mindar, { deviceId, signal, onCamera }) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: requested })
       } catch (error) {
-        if (error?.name !== 'OverconstrainedError' || deviceId) throw error
-        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'environment' } })
+        if (error?.name !== 'OverconstrainedError') throw error
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' } })
       }
       signal?.throwIfAborted()
       const track = stream.getVideoTracks()[0]

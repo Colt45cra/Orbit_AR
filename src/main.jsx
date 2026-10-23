@@ -27,6 +27,7 @@ function App() {
   const assetInput = useRef(null)
   const arContainer = useRef(null)
   const stopTracking = useRef(null)
+  const startupQueue = useRef(Promise.resolve())
 
   useEffect(() => {
     const raw = localStorage.getItem('orbit-ar-project')
@@ -58,7 +59,9 @@ function App() {
     setCompileProgress(0)
     setArError('')
 
-    startOrbitTracking({
+    const startup = startupQueue.current.catch(() => {}).then(() => {
+      abort.signal.throwIfAborted()
+      return startOrbitTracking({
       container: sessionContainer,
       targetFile: trigger.file,
       asset: { ...asset, kind: assetKind },
@@ -73,15 +76,19 @@ function App() {
       },
       onProgress: (value) => !cancelled && setCompileProgress(value),
       onStatus: (value) => !cancelled && setArStatus(value),
+      })
     }).then((stop) => {
-      if (cancelled) stop()
+      if (cancelled) return stop()
       else stopTracking.current = stop
     }).catch((error) => {
       if (!cancelled) {
         setArError(error?.message || 'AR could not start')
+        setCameraInfo(null)
         setArStatus('AR unavailable')
       }
     })
+
+    startupQueue.current = startup
 
     return () => {
       cancelled = true
@@ -249,7 +256,7 @@ function App() {
           <div className="ar-guide">
             <div className="scan-frame"><i/><i/><i/><i/></div>
             <p>{arError || 'Keep at least three card corners visible.'}</p>
-            {arError && <button className="primary-btn" onClick={() => setRetry(value => value + 1)}>Retry AR</button>}
+            {arError && <button className="primary-btn" onClick={() => { setDeviceId(''); setRetry(value => value + 1) }}>Retry with default rear camera</button>}
           </div>
         </div>
       )}

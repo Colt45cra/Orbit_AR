@@ -1,3 +1,4 @@
+import { createTargetCache, startupError } from './target-cache.js'
 import { createCardTracker } from './card-tracker.js'
 import { installOrbitCamera } from './camera.js'
 import * as THREE from 'three'
@@ -15,24 +16,23 @@ async function fileToImage(file) {
     }
     img.onerror = (err) => {
       URL.revokeObjectURL(url)
-      reject(err)
+      reject(new Error('Trigger image could not be decoded. Upload it again as JPG or PNG.'))
     }
     img.src = url
   })
 }
 
-export async function compileOrbitTarget(file, onProgress = () => {}) {
+export const compileOrbitTarget = createTargetCache(async (file, onProgress) => {
   const image = await fileToImage(file)
   const compiler = new Compiler()
-  await compiler.compileImageTargets([image], (progress) => onProgress(Math.round(progress)))
+  await compiler.compileImageTargets([image], progress => onProgress(Math.round(progress)))
   const buffer = await compiler.exportData()
-  const blob = new Blob([buffer], { type: 'application/octet-stream' })
   return {
-    url: URL.createObjectURL(blob),
+    blob: new Blob([buffer], { type: 'application/octet-stream' }),
     imageWidth: image.naturalWidth,
     imageHeight: image.naturalHeight,
   }
-}
+})
 
 function placement(transform) {
   return {
@@ -151,7 +151,9 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   if (!container || !targetFile || !asset) throw new Error('Trigger image and AR content are required')
 
   onStatus?.('Compiling trigger image…')
-  const compiled = await compileOrbitTarget(targetFile, onProgress)
+  let compiled
+  try { compiled = await compileOrbitTarget(targetFile, onProgress) }
+  catch (error) { throw startupError(error, 'Preparing trigger') }
   if (signal?.aborted) { URL.revokeObjectURL(compiled.url); signal.throwIfAborted() }
   onStatus?.('Preparing content…')
 
@@ -182,9 +184,14 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   scene.add(content)
   let cardTracker = null
 
+  let stage = 'Loading AR content'
+  let cleaned = false
   let media = null
   let lostTimer = null
   const cleanup = async () => {
+    if (cleaned) return
+    cleaned = true
+    if (mindarThree.controller) mindarThree.controller.onUpdate = null
     if (lostTimer) clearTimeout(lostTimer)
     cardTracker?.dispose()
     media?.pause()
@@ -197,7 +204,9 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
       const materials = Array.isArray(node.material) ? node.material : [node.material]
       materials.forEach(material => { material?.map?.dispose(); material?.dispose() })
     })
+    mindarThree.controller?.worker?.terminate()
     renderer.dispose()
+    renderer.forceContextLoss()
     URL.revokeObjectURL(compiled.url)
     container.innerHTML = ''
   }
@@ -239,9 +248,11 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     scene.add(ambient)
 
     signal?.throwIfAborted()
+    stage = 'Starting selected camera'
     onStatus?.('Starting camera…')
     await mindarThree.start()
     signal?.throwIfAborted()
+    stage = 'Preparing card tracking'
     cardTracker = createCardTracker({ mindar: mindarThree, anchor, content, aspect: compiled.imageHeight / compiled.imageWidth, onStatus })
     if (anchor.visible) cardTracker.observe()
     onStatus?.('Searching for card…')
@@ -250,6 +261,6 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     return cleanup
   } catch (error) {
     await cleanup()
-    throw error
+    throw startupError(error, stage)
   }
 }
