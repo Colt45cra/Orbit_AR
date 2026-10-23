@@ -16,6 +16,12 @@ function App() {
   const [arStatus, setArStatus] = useState('Preparing AR…')
   const [compileProgress, setCompileProgress] = useState(0)
   const [arError, setArError] = useState('')
+  const [cameraInfo, setCameraInfo] = useState(null)
+  const [deviceId, setDeviceId] = useState('')
+  const [cameraMessage, setCameraMessage] = useState('')
+  const [exposure, setExposure] = useState(0)
+  const [torch, setTorch] = useState(false)
+  const [retry, setRetry] = useState(0)
   const triggerInput = useRef(null)
   const assetInput = useRef(null)
   const arContainer = useRef(null)
@@ -33,22 +39,37 @@ function App() {
 
   const assetKind = useMemo(() => {
     if (!asset) return null
-    if (asset.type.startsWith('video/')) return 'video'
+    if (asset.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(asset.name)) return 'video'
     if (asset.type === 'model/gltf-binary' || asset.name?.toLowerCase().endsWith('.glb')) return 'model'
     return 'image'
   }, [asset])
 
   useEffect(() => {
     if (!arOpen || !arContainer.current || !trigger?.file || !asset) return
+    const sessionContainer = document.createElement('div')
+    Object.assign(sessionContainer.style, { position: 'absolute', inset: '0', overflow: 'hidden' })
+    arContainer.current.appendChild(sessionContainer)
     let cancelled = false
+    const abort = new AbortController()
+    setCameraInfo(null)
+    setCameraMessage('')
+    setArStatus('Preparing AR…')
     setCompileProgress(0)
     setArError('')
 
     startOrbitTracking({
-      container: arContainer.current,
+      container: sessionContainer,
       targetFile: trigger.file,
       asset: { ...asset, kind: assetKind },
       transform,
+      deviceId,
+      signal: abort.signal,
+      onCamera: (info) => {
+        if (cancelled) return
+        setCameraInfo(info)
+        setExposure(info.settings.exposureCompensation ?? 0)
+        setTorch(info.settings.torch ?? false)
+      },
       onProgress: (value) => !cancelled && setCompileProgress(value),
       onStatus: (value) => !cancelled && setArStatus(value),
     }).then((stop) => {
@@ -63,11 +84,27 @@ function App() {
 
     return () => {
       cancelled = true
+      abort.abort()
       const stop = stopTracking.current
       stopTracking.current = null
       if (stop) stop()
+      sessionContainer.remove()
     }
-  }, [arOpen])
+  }, [arOpen, deviceId, retry])
+
+  async function adjustCamera(key, value) {
+    const track = cameraInfo?.track
+    if (!track || track.readyState !== 'live') return
+    try {
+      await track.applyConstraints({ ...track.getConstraints(), advanced: [{ [key]: value }] })
+      const actual = track.getSettings()
+      if (key === 'torch') setTorch(actual.torch ?? value)
+      if (key === 'exposureCompensation') setExposure(actual.exposureCompensation ?? value)
+      setCameraMessage('')
+    } catch {
+      setCameraMessage('This camera could not apply that setting. Try another camera.')
+    }
+  }
 
   function readFile(file, setter) {
     if (!file) return
@@ -195,9 +232,22 @@ function App() {
             </div>
             <button className="ar-close" onClick={closeAR} aria-label="Close AR"><X size={22}/></button>
           </div>
+          {cameraInfo && <div className="ar-camera-controls">
+            <label>Camera
+              <select value={cameraInfo.settings.deviceId || ''} onChange={event => setDeviceId(event.target.value)}>
+                {cameraInfo.devices.map((camera, index) => <option key={camera.deviceId} value={camera.deviceId}>{camera.label || `Camera ${index + 1}`}</option>)}
+              </select>
+            </label>
+            {cameraInfo.capabilities.exposureCompensation && <label>Exposure: {Number(exposure).toFixed(1)}
+              <input aria-label="Camera exposure" type="range" min={cameraInfo.capabilities.exposureCompensation.min} max={cameraInfo.capabilities.exposureCompensation.max} step={cameraInfo.capabilities.exposureCompensation.step || 0.1} value={exposure} onChange={event => setExposure(Number(event.target.value))} onPointerUp={event => adjustCamera('exposureCompensation', Number(event.target.value))} onKeyUp={event => adjustCamera('exposureCompensation', Number(event.target.value))}/>
+            </label>}
+            {cameraInfo.capabilities.torch && <button onClick={() => adjustCamera('torch', !torch)}>Light {torch ? 'on' : 'off'}</button>}
+            <small>{cameraMessage || 'For cards, try the main rear camera. Tilt away from glare; lower exposure if whites look washed out.'}</small>
+          </div>}
           <div className="ar-guide">
             <div className="scan-frame"><i/><i/><i/><i/></div>
-            <p>{arError || 'Point the camera at your uploaded trigger image.'}</p>
+            <p>{arError || 'Keep the whole trigger visible, sharp, and free of glare.'}</p>
+            {arError && <button className="primary-btn" onClick={() => setRetry(value => value + 1)}>Retry AR</button>}
           </div>
         </div>
       )}

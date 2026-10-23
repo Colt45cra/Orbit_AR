@@ -1,3 +1,4 @@
+import { installOrbitCamera } from './camera.js'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js'
@@ -81,14 +82,23 @@ async function addImage(group, asset, transform) {
 
 async function addVideo(group, asset, transform) {
   const video = document.createElement('video')
-  video.src = asset.url
   video.loop = true
   video.muted = true
   video.playsInline = true
   video.preload = 'auto'
-  await new Promise((resolve) => {
-    if (video.readyState >= 1) return resolve()
-    video.onloadedmetadata = () => resolve()
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => done(new Error('Video could not load. Try an MP4 encoded with H.264.')), 20000)
+    function done(error) {
+      clearTimeout(timer)
+      video.onloadeddata = null
+      video.onerror = null
+      if (error) { video.removeAttribute('src'); video.load(); reject(error) }
+      else resolve()
+    }
+    video.onloadeddata = () => done()
+    video.onerror = () => done(new Error('This video cannot be decoded by your browser. Try an H.264 MP4.'))
+    video.src = asset.url
+    video.load()
   })
   const aspect = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9
   const texture = new THREE.VideoTexture(video)
@@ -147,12 +157,6 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
   const composed = new THREE.Matrix4()
   const previousRawPosition = new THREE.Vector3()
   const previousRawQuaternion = new THREE.Quaternion()
-  const predictedPosition = new THREE.Vector3()
-  const rawDeltaPosition = new THREE.Vector3()
-  const predictedQuaternion = new THREE.Quaternion()
-  const deltaQuaternion = new THREE.Quaternion()
-  const predictionStep = new THREE.Quaternion()
-  const identityQuaternion = new THREE.Quaternion()
   let initialized = false
   let quietFrames = 0
   let settledLocked = false
@@ -186,27 +190,12 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
         const angularSpeed = rawTurn / dt
 
         const moving = linearSpeed > 0.10 || angularSpeed > 0.45
-        predictedPosition.copy(rawPosition)
-        predictedQuaternion.copy(rawQuaternion)
-
         if (moving) {
-          // Compensate for one small camera/render interval of tracking latency.
-          // Prediction is tightly capped to avoid overshoot on noisy detections.
-          const predictionSeconds = Math.min(0.018, dt * 0.75)
-          const velocityScale = predictionSeconds / dt
-          rawDeltaPosition.copy(rawPosition).sub(previousRawPosition)
-          predictedPosition.addScaledVector(rawDeltaPosition, Math.min(velocityScale, 0.75))
-
-          deltaQuaternion.copy(previousRawQuaternion).invert().multiply(rawQuaternion)
-          predictionStep.copy(identityQuaternion).slerp(deltaQuaternion, Math.min(velocityScale, 0.65))
-          predictedQuaternion.multiply(predictionStep).normalize()
-
           settledLocked = false
           quietFrames = 0
         }
-
-        const targetPosition = moving ? predictedPosition : rawPosition
-        const targetQuaternion = moving ? predictedQuaternion : rawQuaternion
+        const targetPosition = rawPosition
+        const targetQuaternion = rawQuaternion
         const positionDelta = smoothPosition.distanceTo(targetPosition)
         const rotationDelta = smoothQuaternion.angleTo(targetQuaternion)
         const scaleDelta = smoothScale.distanceTo(rawScale)
@@ -284,12 +273,13 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
   }
 }
 
-export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus }) {
+export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus, deviceId, signal, onCamera }) {
   if (!container || !targetFile || !asset) throw new Error('Trigger image and AR content are required')
 
   onStatus?.('Compiling trigger image…')
   const compiled = await compileOrbitTarget(targetFile, onProgress)
-  onStatus?.('Starting camera…')
+  if (signal?.aborted) { URL.revokeObjectURL(compiled.url); signal.throwIfAborted() }
+  onStatus?.('Preparing content…')
 
   const mindarThree = new MindARThree({
     container,
@@ -299,11 +289,12 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     uiError: 'no',
     // Let MindAR react faster during motion; Orbit's settled lock handles stillness.
     filterMinCF: 0.005,
-    filterBeta: 1700,
+    filterBeta: 400,
     missTolerance: 8,
-    warmupTolerance: 6,
+    warmupTolerance: 3,
   })
 
+  installOrbitCamera(mindarThree, { deviceId, signal, onCamera })
   const { renderer, scene, camera } = mindarThree
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   renderer.toneMapping = THREE.NoToneMapping
@@ -314,52 +305,68 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   const stabilizeAnchor = createAnchorMatrixStabilizer(transform.tilt ?? 0)
 
   let media = null
-  if (asset.kind === 'video') media = (await addVideo(anchor.group, asset, transform)).media
-  else if (asset.kind === 'model') await addModel(anchor.group, asset, transform)
-  else await addImage(anchor.group, asset, transform)
-
   let lostTimer = null
-
-  anchor.onTargetFound = () => {
-    stabilizeAnchor.reset()
-    if (lostTimer) {
-      clearTimeout(lostTimer)
-      lostTimer = null
-    }
-    onStatus?.('Target found')
-    if (media) media.play().catch(() => {})
-    onFound?.()
-  }
-
-  anchor.onTargetLost = () => {
-    stabilizeAnchor.reset()
-    onStatus?.('Searching for trigger…')
+  const cleanup = async () => {
     if (lostTimer) clearTimeout(lostTimer)
-    lostTimer = setTimeout(() => {
-      if (media) media.pause()
-      onLost?.()
-    }, 140)
+    media?.pause()
+    if (media) { media.removeAttribute('src'); media.load() }
+    renderer.setAnimationLoop(null)
+    try { if (mindarThree.controller) mindarThree.stop() } catch {}
+    mindarThree.video?.srcObject?.getTracks().forEach(track => track.stop())
+    scene.traverse(node => {
+      node.geometry?.dispose()
+      const materials = Array.isArray(node.material) ? node.material : [node.material]
+      materials.forEach(material => { material?.map?.dispose(); material?.dispose() })
+    })
+    renderer.dispose()
+    URL.revokeObjectURL(compiled.url)
+    container.innerHTML = ''
   }
+  try {
+    if (asset.kind === 'video') media = (await addVideo(anchor.group, asset, transform)).media
+    else if (asset.kind === 'model') await addModel(anchor.group, asset, transform)
+    else await addImage(anchor.group, asset, transform)
 
-  // MindAR calls this immediately after writing its final target-space matrix.
-  // Smooth that exact matrix in place so the asset never leaves the native anchor space.
-  anchor.onTargetUpdate = () => {
-    if (anchor.visible) stabilizeAnchor.update(anchor.group)
-  }
+    anchor.onTargetFound = () => {
+      stabilizeAnchor.reset()
+      if (lostTimer) {
+        clearTimeout(lostTimer)
+        lostTimer = null
+      }
+      onStatus?.('Target found')
+      if (media) media.play().catch(() => {})
+      onFound?.()
+    }
 
-  const ambient = new THREE.AmbientLight(0xffffff, 1.0)
-  scene.add(ambient)
+    anchor.onTargetLost = () => {
+      stabilizeAnchor.reset()
+      onStatus?.('Searching for trigger…')
+      if (lostTimer) clearTimeout(lostTimer)
+      lostTimer = setTimeout(() => {
+        if (media) media.pause()
+        onLost?.()
+      }, 140)
+    }
 
-  await mindarThree.start()
-  onStatus?.('Searching for trigger…')
-  renderer.setAnimationLoop(() => renderer.render(scene, camera))
+    // MindAR calls this immediately after writing its final target-space matrix.
+    // Smooth that exact matrix in place so the asset never leaves the native anchor space.
+    anchor.onTargetUpdate = () => {
+      if (anchor.visible) stabilizeAnchor.update(anchor.group)
+    }
 
-  return async () => {
-    try { if (lostTimer) clearTimeout(lostTimer) } catch {}
-    try { media?.pause() } catch {}
-    try { renderer.setAnimationLoop(null) } catch {}
-    try { mindarThree.stop() } catch {}
-    try { URL.revokeObjectURL(compiled.url) } catch {}
-    try { container.innerHTML = '' } catch {}
+    const ambient = new THREE.AmbientLight(0xffffff, 1.0)
+    scene.add(ambient)
+
+    signal?.throwIfAborted()
+    onStatus?.('Starting camera…')
+    await mindarThree.start()
+    signal?.throwIfAborted()
+    onStatus?.('Searching for trigger…')
+    renderer.setAnimationLoop(() => renderer.render(scene, camera))
+
+    return cleanup
+  } catch (error) {
+    await cleanup()
+    throw error
   }
 }
