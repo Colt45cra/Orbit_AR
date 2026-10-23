@@ -1,3 +1,4 @@
+import { createCardTracker } from './card-tracker.js'
 import { installOrbitCamera } from './camera.js'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
@@ -146,133 +147,6 @@ async function addModel(group, asset, transform) {
   return { media: null }
 }
 
-function createAnchorMatrixStabilizer(tiltDegrees = 0) {
-  const upright = THREE.MathUtils.clamp(Math.abs(tiltDegrees) / 90, 0, 1)
-  const rawPosition = new THREE.Vector3()
-  const rawQuaternion = new THREE.Quaternion()
-  const rawScale = new THREE.Vector3()
-  const smoothPosition = new THREE.Vector3()
-  const smoothQuaternion = new THREE.Quaternion()
-  const smoothScale = new THREE.Vector3()
-  const composed = new THREE.Matrix4()
-  const previousRawPosition = new THREE.Vector3()
-  const previousRawQuaternion = new THREE.Quaternion()
-  let initialized = false
-  let quietFrames = 0
-  let settledLocked = false
-  let previousUpdateTime = 0
-
-  return {
-    reset() {
-      initialized = false
-      quietFrames = 0
-      settledLocked = false
-      previousUpdateTime = 0
-    },
-    update(group) {
-      group.matrix.decompose(rawPosition, rawQuaternion, rawScale)
-
-      const now = performance.now()
-
-      if (!initialized) {
-        smoothPosition.copy(rawPosition)
-        smoothQuaternion.copy(rawQuaternion)
-        smoothScale.copy(rawScale)
-        previousRawPosition.copy(rawPosition)
-        previousRawQuaternion.copy(rawQuaternion)
-        previousUpdateTime = now
-        initialized = true
-      } else {
-        const dt = THREE.MathUtils.clamp((now - previousUpdateTime) / 1000, 1 / 120, 0.08)
-        const rawTravel = previousRawPosition.distanceTo(rawPosition)
-        const rawTurn = previousRawQuaternion.angleTo(rawQuaternion)
-        const linearSpeed = rawTravel / dt
-        const angularSpeed = rawTurn / dt
-
-        const moving = linearSpeed > 0.10 || angularSpeed > 0.45
-        if (moving) {
-          settledLocked = false
-          quietFrames = 0
-        }
-        const targetPosition = rawPosition
-        const targetQuaternion = rawQuaternion
-        const positionDelta = smoothPosition.distanceTo(targetPosition)
-        const rotationDelta = smoothQuaternion.angleTo(targetQuaternion)
-        const scaleDelta = smoothScale.distanceTo(rawScale)
-
-        // Small pose changes are mostly feature/camera noise. Larger changes
-        // are followed progressively faster so deliberate phone motion stays responsive.
-        const positionDeadZone = THREE.MathUtils.lerp(0.0025, 0.0032, upright)
-        const rotationDeadZone = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(0.30, 0.48, upright))
-        const scaleDeadZone = THREE.MathUtils.lerp(0.0025, 0.0030, upright)
-
-        // Once the target has remained very quiet for several updates, enter
-        // a short-lived settled state that rejects sub-pixel pose buzz.
-        const quietPosition = THREE.MathUtils.lerp(0.0055, 0.0070, upright)
-        const quietRotation = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(0.7, 1.0, upright))
-        const quietScale = THREE.MathUtils.lerp(0.0050, 0.0065, upright)
-        const isQuiet = positionDelta < quietPosition && rotationDelta < quietRotation && scaleDelta < quietScale
-
-        const releasePosition = THREE.MathUtils.lerp(0.012, 0.015, upright)
-        const releaseRotation = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(1.5, 2.0, upright))
-        const releaseScale = THREE.MathUtils.lerp(0.010, 0.013, upright)
-
-        if (!settledLocked) {
-          if (isQuiet) quietFrames = Math.min(quietFrames + 1, 20)
-          else quietFrames = 0
-
-          if (quietFrames >= 5) settledLocked = true
-        } else if (
-          positionDelta > releasePosition ||
-          rotationDelta > releaseRotation ||
-          scaleDelta > releaseScale
-        ) {
-          // Hysteresis: stay locked through ordinary micro-noise and release
-          // only when a clearly deliberate pose change exceeds the wider threshold.
-          settledLocked = false
-          quietFrames = 0
-          smoothPosition.lerp(rawPosition, 0.35)
-          smoothQuaternion.slerp(rawQuaternion, 0.30)
-          smoothScale.lerp(rawScale, 0.25)
-        }
-
-        if (!settledLocked && positionDelta > positionDeadZone) {
-          const smallAlpha = THREE.MathUtils.lerp(0.075, 0.055, upright)
-          const alpha = moving
-            ? (positionDelta > 0.07 ? 0.90 : positionDelta > 0.025 ? 0.78 : 0.62)
-            : (positionDelta > 0.07 ? 0.50 : positionDelta > 0.025 ? 0.28 : smallAlpha)
-          smoothPosition.lerp(targetPosition, alpha)
-        }
-
-        if (!settledLocked && rotationDelta > rotationDeadZone) {
-          // Upright planes visually amplify tiny angular noise at their top edge.
-          // During real movement, switch to a high-response path to prevent visible lag.
-          const smallAlpha = THREE.MathUtils.lerp(0.07, 0.04, upright)
-          const mediumAlpha = THREE.MathUtils.lerp(0.25, 0.20, upright)
-          const alpha = moving
-            ? (rotationDelta > 0.14 ? 0.88 : rotationDelta > 0.045 ? 0.76 : 0.58)
-            : (rotationDelta > 0.14 ? 0.48 : rotationDelta > 0.045 ? mediumAlpha : smallAlpha)
-          smoothQuaternion.slerp(targetQuaternion, alpha)
-        }
-
-        if (!settledLocked && scaleDelta > scaleDeadZone) {
-          const smallAlpha = THREE.MathUtils.lerp(0.08, 0.06, upright)
-          const alpha = moving ? 0.45 : (scaleDelta > 0.045 ? 0.35 : smallAlpha)
-          smoothScale.lerp(rawScale, alpha)
-        }
-
-        previousRawPosition.copy(rawPosition)
-        previousRawQuaternion.copy(rawQuaternion)
-        previousUpdateTime = now
-      }
-
-      composed.compose(smoothPosition, smoothQuaternion, smoothScale)
-      group.matrix.copy(composed)
-      group.matrixWorldNeedsUpdate = true
-    },
-  }
-}
-
 export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus, deviceId, signal, onCamera }) {
   if (!container || !targetFile || !asset) throw new Error('Trigger image and AR content are required')
 
@@ -287,11 +161,11 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     uiLoading: 'no',
     uiScanning: 'no',
     uiError: 'no',
-    // Let MindAR react faster during motion; Orbit's settled lock handles stillness.
-    filterMinCF: 0.005,
-    filterBeta: 400,
-    missTolerance: 8,
-    warmupTolerance: 3,
+    // Recognition seeds the card-edge search; do not retain poses after loss.
+    filterMinCF: 0.01,
+    filterBeta: 1000,
+    missTolerance: 0,
+    warmupTolerance: 2,
   })
 
   installOrbitCamera(mindarThree, { deviceId, signal, onCamera })
@@ -302,12 +176,17 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace
 
   const anchor = mindarThree.addAnchor(0)
-  const stabilizeAnchor = createAnchorMatrixStabilizer(transform.tilt ?? 0)
+  const content = new THREE.Group()
+  content.matrixAutoUpdate = false
+  content.visible = false
+  scene.add(content)
+  let cardTracker = null
 
   let media = null
   let lostTimer = null
   const cleanup = async () => {
     if (lostTimer) clearTimeout(lostTimer)
+    cardTracker?.dispose()
     media?.pause()
     if (media) { media.removeAttribute('src'); media.load() }
     renderer.setAnimationLoop(null)
@@ -323,24 +202,26 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     container.innerHTML = ''
   }
   try {
-    if (asset.kind === 'video') media = (await addVideo(anchor.group, asset, transform)).media
-    else if (asset.kind === 'model') await addModel(anchor.group, asset, transform)
-    else await addImage(anchor.group, asset, transform)
+    if (asset.kind === 'video') media = (await addVideo(content, asset, transform)).media
+    else if (asset.kind === 'model') await addModel(content, asset, transform)
+    else await addImage(content, asset, transform)
 
     anchor.onTargetFound = () => {
-      stabilizeAnchor.reset()
+
       if (lostTimer) {
         clearTimeout(lostTimer)
         lostTimer = null
       }
-      onStatus?.('Target found')
+      onStatus?.('Checking card corners…')
       if (media) media.play().catch(() => {})
       onFound?.()
     }
 
     anchor.onTargetLost = () => {
-      stabilizeAnchor.reset()
-      onStatus?.('Searching for trigger…')
+
+      cardTracker?.lost()
+      content.visible = false
+      onStatus?.('Searching for card…')
       if (lostTimer) clearTimeout(lostTimer)
       lostTimer = setTimeout(() => {
         if (media) media.pause()
@@ -349,9 +230,9 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     }
 
     // MindAR calls this immediately after writing its final target-space matrix.
-    // Smooth that exact matrix in place so the asset never leaves the native anchor space.
+    // Use the recognized target only to seed the measured card-edge search.
     anchor.onTargetUpdate = () => {
-      if (anchor.visible) stabilizeAnchor.update(anchor.group)
+      if (anchor.visible) cardTracker?.observe()
     }
 
     const ambient = new THREE.AmbientLight(0xffffff, 1.0)
@@ -361,8 +242,10 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     onStatus?.('Starting camera…')
     await mindarThree.start()
     signal?.throwIfAborted()
-    onStatus?.('Searching for trigger…')
-    renderer.setAnimationLoop(() => renderer.render(scene, camera))
+    cardTracker = createCardTracker({ mindar: mindarThree, anchor, content, aspect: compiled.imageHeight / compiled.imageWidth, onStatus })
+    if (anchor.visible) cardTracker.observe()
+    onStatus?.('Searching for card…')
+    renderer.setAnimationLoop(() => { cardTracker.update(); renderer.render(scene, camera) })
 
     return cleanup
   } catch (error) {

@@ -14,6 +14,7 @@ function setup(capture) {
     applyConstraints: async () => { throw new Error('Unsupported optional control') },
   }
   const stream = { getTracks: () => [track], getVideoTracks: () => [track] }
+  globalThis.window = { innerWidth: 720, innerHeight: 1280 }
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => video } })
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { mediaDevices: {
     getUserMedia: constraints => capture(constraints, stream),

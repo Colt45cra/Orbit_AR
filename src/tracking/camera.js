@@ -22,9 +22,10 @@ export function installOrbitCamera(mindar, { deviceId, signal, onCamera }) {
     const stop = () => stream?.getTracks().forEach(track => track.stop())
     signal?.addEventListener('abort', stop, { once: true })
     try {
+      const portrait = window.innerHeight > window.innerWidth
       const requested = {
         ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }),
-        width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 },
+        width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 }, frameRate: { ideal: 30, max: 30 },
       }
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: requested })

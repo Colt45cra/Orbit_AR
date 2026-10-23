@@ -12,3 +12,5 @@
 .ar-camera-controls small { font-size:11px; line-height:1.4; color:#d2d8cc; }
 .ar-guide { pointer-events:none; }
 .ar-guide button { pointer-events:auto; }
+.ar-camera-toggle { position:absolute; top:92px; right:16px; z-index:11; background:rgba(0,0,0,.68); color:#fff; border:1px solid #555; border-radius:20px; padding:9px 14px; }
+.ar-camera-controls { top:140px; }

@@ -17,6 +17,7 @@ function App() {
   const [compileProgress, setCompileProgress] = useState(0)
   const [arError, setArError] = useState('')
   const [cameraInfo, setCameraInfo] = useState(null)
+  const [cameraControlsOpen, setCameraControlsOpen] = useState(false)
   const [deviceId, setDeviceId] = useState('')
   const [cameraMessage, setCameraMessage] = useState('')
   const [exposure, setExposure] = useState(0)
@@ -148,7 +149,7 @@ function App() {
         <section className="hero-panel">
           <div className="eyebrow">ORBIT STUDIO</div>
           <h1>Turn any image into an <span>AR trigger.</span></h1>
-          <p>Upload the image people will point their camera at, attach a PNG, video, or 3D model, then position the experience exactly where you want it.</p>
+          <p>Upload a tightly cropped business card image, attach a PNG, video, or 3D model, then position the experience. Card tracking checks the edges and at least three corner regions.</p>
         </section>
 
         <section className="studio-grid">
@@ -160,7 +161,7 @@ function App() {
             <button className="upload-card" onClick={() => triggerInput.current?.click()}>
               <Upload size={21} />
               <strong>{trigger ? trigger.name : 'Upload trigger image'}</strong>
-              <span>JPG, PNG, WEBP</span>
+              <span>JPG, PNG, WEBP · crop tightly to the card edges</span>
             </button>
             <input ref={triggerInput} hidden type="file" accept="image/*" onChange={e => readFile(e.target.files?.[0], setTrigger)} />
 
@@ -232,7 +233,8 @@ function App() {
             </div>
             <button className="ar-close" onClick={closeAR} aria-label="Close AR"><X size={22}/></button>
           </div>
-          {cameraInfo && <div className="ar-camera-controls">
+          {cameraInfo && <button className="ar-camera-toggle" onClick={() => setCameraControlsOpen(value => !value)} aria-expanded={cameraControlsOpen}>Camera settings</button>}
+          {cameraInfo && cameraControlsOpen && <div className="ar-camera-controls">
             <label>Camera
               <select value={cameraInfo.settings.deviceId || ''} onChange={event => setDeviceId(event.target.value)}>
                 {cameraInfo.devices.map((camera, index) => <option key={camera.deviceId} value={camera.deviceId}>{camera.label || `Camera ${index + 1}`}</option>)}
@@ -246,7 +248,7 @@ function App() {
           </div>}
           <div className="ar-guide">
             <div className="scan-frame"><i/><i/><i/><i/></div>
-            <p>{arError || 'Keep the whole trigger visible, sharp, and free of glare.'}</p>
+            <p>{arError || 'Keep at least three card corners visible.'}</p>
             {arError && <button className="primary-btn" onClick={() => setRetry(value => value + 1)}>Retry AR</button>}
           </div>
         </div>
