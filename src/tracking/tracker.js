@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js'
-import { Compiler } from 'mind-ar/src/image-target/compiler.js'
 
 async function fileToImage(file) {
   return await new Promise((resolve, reject) => {
@@ -20,6 +19,7 @@ async function fileToImage(file) {
 }
 
 export async function compileOrbitTarget(file, onProgress = () => {}) {
+  const { Compiler } = await import('mind-ar/src/image-target/compiler.js')
   const image = await fileToImage(file)
   const compiler = new Compiler()
   await compiler.compileImageTargets([image], (progress) => onProgress(Math.round(progress)))
@@ -81,14 +81,18 @@ async function addImage(group, asset, transform) {
 
 async function addVideo(group, asset, transform) {
   const video = document.createElement('video')
+  video.crossOrigin = 'anonymous'
   video.src = asset.url
   video.loop = true
   video.muted = true
   video.playsInline = true
   video.preload = 'auto'
-  await new Promise((resolve) => {
-    if (video.readyState >= 1) return resolve()
-    video.onloadedmetadata = () => resolve()
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => done(new Error('Video took too long to load. Check your connection.')), 30000)
+    function done(error) { clearTimeout(timer); video.onloadedmetadata = null; video.onerror = null; error ? reject(error) : resolve() }
+    video.onloadedmetadata = () => done()
+    video.onerror = () => done(new Error('Video could not load. Use a public MP4 with cross-origin access.'))
+    if (video.readyState >= 1) done()
   })
   const aspect = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9
   const texture = new THREE.VideoTexture(video)
@@ -284,11 +288,11 @@ function createAnchorMatrixStabilizer(tiltDegrees = 0) {
   }
 }
 
-export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus }) {
-  if (!container || !targetFile || !asset) throw new Error('Trigger image and AR content are required')
+export async function startOrbitTracking({ container, targetFile, targetSrc, asset, transform, onProgress, onFound, onLost, onStatus }) {
+  if (!container || (!targetFile && !targetSrc) || !asset) throw new Error('Trigger image and AR content are required')
 
-  onStatus?.('Compiling trigger image…')
-  const compiled = await compileOrbitTarget(targetFile, onProgress)
+  if (!targetSrc) onStatus?.('Compiling trigger image…')
+  const compiled = targetSrc ? { url: targetSrc } : await compileOrbitTarget(targetFile, onProgress)
   onStatus?.('Starting camera…')
 
   const mindarThree = new MindARThree({
@@ -314,11 +318,23 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   const stabilizeAnchor = createAnchorMatrixStabilizer(transform.tilt ?? 0)
 
   let media = null
+  const cleanup = async () => {
+    clearTimeout(lostTimer)
+    media?.pause()
+    if (media) { media.removeAttribute('src'); media.load() }
+    renderer.setAnimationLoop(null)
+    await mindarThree.stop()
+    mindarThree.video?.srcObject?.getTracks().forEach(track => track.stop())
+    scene.traverse(node => { node.geometry?.dispose(); const materials = Array.isArray(node.material) ? node.material : [node.material]; materials.forEach(m => { m?.map?.dispose(); m?.dispose() }) })
+    renderer.dispose()
+    if (!targetSrc) URL.revokeObjectURL(compiled.url)
+    container.innerHTML = ''
+  }
+  let lostTimer = null
+  try {
   if (asset.kind === 'video') media = (await addVideo(anchor.group, asset, transform)).media
   else if (asset.kind === 'model') await addModel(anchor.group, asset, transform)
   else await addImage(anchor.group, asset, transform)
-
-  let lostTimer = null
 
   anchor.onTargetFound = () => {
     stabilizeAnchor.reset()
@@ -354,12 +370,9 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
   onStatus?.('Searching for trigger…')
   renderer.setAnimationLoop(() => renderer.render(scene, camera))
 
-  return async () => {
-    try { if (lostTimer) clearTimeout(lostTimer) } catch {}
-    try { media?.pause() } catch {}
-    try { renderer.setAnimationLoop(null) } catch {}
-    try { mindarThree.stop() } catch {}
-    try { URL.revokeObjectURL(compiled.url) } catch {}
-    try { container.innerHTML = '' } catch {}
-  }
+  } catch (error) { await cleanup().catch(() => {}); throw error }
+  const stop = async () => { await cleanup() }
+  stop.setMuted = value => { if (media) media.muted = value }
+  stop.play = () => media?.play().catch(() => {})
+  return stop
 }
