@@ -34,3 +34,25 @@ npm run build
 ```
 
 The project is Vite + React and is ready to deploy on Vercel.
+
+## AllTheMoney AR companion viewer
+
+`/ar?experience=https%3A%2F%2Fyour-host%2Fexperiences%2Fswell.json`
+opens a public experience and requests camera access. No sign-in or installation
+is required. The full printed card is the image target; the QR opens the URL.
+Video is muted by default and has an explicit sound button. Hide/pause on loss of
+tracking; close the camera when finished.
+
+The Studio's **Export viewer experience** compiles the target once and downloads
+`experience.json` with the target image, compiled target and media embedded.
+Serve it over HTTPS (for example in `public/experiences/swell.json` in this repo),
+then enter that public URL in **Create card QR**. Download the QR PNG for print.
+The QR links to the manifest, so replacing its media at the same URL preserves
+printed cards. Remote manifests/media must allow CORS from the viewer origin.
+A version 1 manifest can alternatively reference separate HTTPS media and .mind
+files, avoiding base64 overhead for larger videos.
+
+This is a web companion, not an App Store release. Browser camera permission is
+required; sound needs a user gesture. Test real iPhone Safari and Android Chrome
+against the final printed artwork before distributing cards. The final Swell
+card artwork and video are still required; no campaign assets are supplied here.

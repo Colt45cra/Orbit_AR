@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Box, Camera, Image as ImageIcon, Layers3, Play, RotateCcw, Save, Sparkles, Upload, Video, X } from 'lucide-react'
-import { startOrbitTracking } from './tracking/tracker.js'
 import './styles.css'
+import Viewer from './viewer/Viewer.jsx'
+import Publish from './viewer/Publish.jsx'
 
 const emptyTransform = { x: 50, y: 50, scale: 1, rotation: 0, tilt: 0, opacity: 1 }
 
@@ -44,14 +45,14 @@ function App() {
     setCompileProgress(0)
     setArError('')
 
-    startOrbitTracking({
+    import('./tracking/tracker.js').then(({startOrbitTracking}) => startOrbitTracking({
       container: arContainer.current,
       targetFile: trigger.file,
       asset: { ...asset, kind: assetKind },
       transform,
       onProgress: (value) => !cancelled && setCompileProgress(value),
       onStatus: (value) => !cancelled && setArStatus(value),
-    }).then((stop) => {
+    })).then((stop) => {
       if (cancelled) stop()
       else stopTracking.current = stop
     }).catch((error) => {
@@ -172,6 +173,7 @@ function App() {
           </section>
         </section>
 
+        <Publish trigger={trigger} asset={asset && {...asset, kind: assetKind}} transform={transform} title={projectName}/>
         <section className="panel tracking-panel">
           <div className="tracking-icon"><Camera size={24}/></div>
           <div className="tracking-copy">
@@ -247,4 +249,4 @@ function Status({ icon, label, value, active }) {
   return <div className={`status-pill ${active ? 'active' : ''}`}>{icon}<span>{label}</span><strong>{value}</strong></div>
 }
 
-createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>)
+createRoot(document.getElementById('root')).render(<React.StrictMode>{location.pathname === '/ar' ? <Viewer/> : <App />}</React.StrictMode>)
