@@ -10,6 +10,7 @@ function App() {
   const [projectName, setProjectName] = useState('Untitled Orbit')
   const [trigger, setTrigger] = useState(null)
   const [asset, setAsset] = useState(null)
+  const [chroma, setChroma] = useState({ enabled: true, keyColor: '#00ff00', similarity: 0.2, smoothness: 0.16, spill: 0.35 })
   const [transform, setTransform] = useState(emptyTransform)
   const [saved, setSaved] = useState(false)
   const [arOpen, setArOpen] = useState(false)
@@ -36,6 +37,7 @@ function App() {
       const parsed = JSON.parse(raw)
       if (parsed.projectName) setProjectName(parsed.projectName)
       if (parsed.transform) setTransform({ ...emptyTransform, ...parsed.transform })
+      if (parsed.chroma) setChroma(c => ({ ...c, ...parsed.chroma }))
     } catch {}
   }, [])
 
@@ -64,7 +66,7 @@ function App() {
       return startOrbitTracking({
       container: sessionContainer,
       targetFile: trigger.file,
-      asset: { ...asset, kind: assetKind },
+      asset: { ...asset, kind: assetKind, chroma: assetKind === 'video' ? chroma : undefined },
       transform,
       deviceId,
       signal: abort.signal,
@@ -122,7 +124,7 @@ function App() {
   }
 
   function saveProject() {
-    localStorage.setItem('orbit-ar-project', JSON.stringify({ projectName, transform }))
+    localStorage.setItem('orbit-ar-project', JSON.stringify({ projectName, transform, chroma }))
     setSaved(true)
     setTimeout(() => setSaved(false), 1800)
   }
@@ -179,6 +181,18 @@ function App() {
               <span>PNG, JPG, MP4, WEBM, GLB</span>
             </button>
             <input ref={assetInput} hidden type="file" accept="image/*,video/*,.glb,model/gltf-binary" onChange={e => readFile(e.target.files?.[0], setAsset)} />
+
+            {assetKind === 'video' && <div className="chroma-panel">
+              <div className="section-title"><Video size={17}/> Green-screen transparency</div>
+              <label className="chroma-toggle"><input type="checkbox" checked={chroma.enabled} onChange={event => setChroma(c => ({...c, enabled: event.target.checked}))}/> Remove green background in AR</label>
+              {chroma.enabled && <>
+                <label className="chroma-color">Background color <input type="color" value={chroma.keyColor} onChange={event => setChroma(c => ({...c, keyColor: event.target.value}))}/></label>
+                <Slider label="Green removal" min="0.02" max="0.6" step="0.01" value={chroma.similarity} onChange={v => setChroma(c => ({...c, similarity:v}))}/>
+                <Slider label="Edge softness" min="0.01" max="0.35" step="0.01" value={chroma.smoothness} onChange={v => setChroma(c => ({...c, smoothness:v}))}/>
+                <Slider label="Green spill cleanup" min="0" max="1" step="0.01" value={chroma.spill} onChange={v => setChroma(c => ({...c, spill:v}))}/>
+              </>}
+              <p className="preview-sub">The green background is removed in the AR camera view. Test and tune the edges with your uploaded video.</p>
+            </div>}
 
             <div className="transform-head">
               <div className="section-title no-margin"><Box size={17}/> Placement</div>
