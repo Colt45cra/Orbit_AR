@@ -83,6 +83,7 @@ async function addImage(group, asset, transform) {
 
 async function addVideo(group, asset, transform) {
   const video = document.createElement('video')
+  video.crossOrigin = 'anonymous'
   video.loop = true
   video.muted = true
   video.playsInline = true
@@ -193,14 +194,14 @@ async function addModel(group, asset, transform) {
   return { media: null }
 }
 
-export async function startOrbitTracking({ container, targetFile, asset, transform, onProgress, onFound, onLost, onStatus, deviceId, signal, onCamera }) {
-  if (!container || !targetFile || !asset) throw new Error('Trigger image and AR content are required')
+export async function startOrbitTracking({ container, targetFile, targetSrc, targetAspect = 7 / 4, asset, transform, onProgress, onFound, onLost, onStatus, deviceId, signal, onCamera }) {
+  if (!container || (!targetFile && !targetSrc) || !asset) throw new Error('Trigger image and AR content are required')
 
-  onStatus?.('Compiling trigger image…')
+  if (!targetSrc) onStatus?.('Compiling trigger image…')
   let compiled
-  try { compiled = await compileOrbitTarget(targetFile, onProgress) }
+  try { compiled = targetSrc ? { url: targetSrc, imageWidth: targetAspect, imageHeight: 1 } : await compileOrbitTarget(targetFile, onProgress) }
   catch (error) { throw startupError(error, 'Preparing trigger') }
-  if (signal?.aborted) { URL.revokeObjectURL(compiled.url); signal.throwIfAborted() }
+  if (signal?.aborted) { if (!targetSrc) URL.revokeObjectURL(compiled.url); signal.throwIfAborted() }
   onStatus?.('Preparing content…')
 
   const mindarThree = new MindARThree({
@@ -253,7 +254,7 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     mindarThree.controller?.worker?.terminate()
     renderer.dispose()
     renderer.forceContextLoss()
-    URL.revokeObjectURL(compiled.url)
+    if (!targetSrc) URL.revokeObjectURL(compiled.url)
     container.innerHTML = ''
   }
   try {
@@ -304,7 +305,10 @@ export async function startOrbitTracking({ container, targetFile, asset, transfo
     onStatus?.('Searching for card…')
     renderer.setAnimationLoop(() => { cardTracker.update(); renderer.render(scene, camera) })
 
-    return cleanup
+    const stop = cleanup
+    stop.setMuted = value => { if (media) media.muted = value }
+    stop.play = () => media?.play().catch(() => {})
+    return stop
   } catch (error) {
     await cleanup()
     throw startupError(error, stage)
