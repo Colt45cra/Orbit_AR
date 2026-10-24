@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import { Box, Camera, Image as ImageIcon, Layers3, Play, RotateCcw, Save, Sparkles, Upload, Video, X } from 'lucide-react'
 import { startOrbitTracking } from './tracking/tracker.js'
 import './styles.css'
+import Viewer from './viewer/Viewer.jsx'
+import Publish from './viewer/Publish.jsx'
 
 const emptyTransform = { x: 50, y: 50, scale: 1, rotation: 0, tilt: 0, opacity: 1 }
 
@@ -231,6 +233,7 @@ function App() {
           </section>
         </section>
 
+        <Publish trigger={trigger} asset={asset && {...asset, kind: assetKind, chroma}} transform={transform} title={projectName}/>
         <section className="panel tracking-panel">
           <div className="tracking-icon"><Camera size={24}/></div>
           <div className="tracking-copy">
@@ -320,4 +323,4 @@ function Status({ icon, label, value, active }) {
   return <div className={`status-pill ${active ? 'active' : ''}`}>{icon}<span>{label}</span><strong>{value}</strong></div>
 }
 
-createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>)
+createRoot(document.getElementById('root')).render(<React.StrictMode>{window.location.pathname === '/ar' ? <Viewer /> : <App />}</React.StrictMode>)
