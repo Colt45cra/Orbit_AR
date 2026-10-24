@@ -12,7 +12,7 @@ export function parseExperience(raw, base) {
     if (value !== undefined && (!Number.isFinite(value) || Math.abs(value) > 1000)) throw new Error('Invalid placement settings.')
     if (value !== undefined) transform[key] = value
   }
-  return { title: String(raw.title || 'AllTheMoney experience').slice(0,120), target: { compiled: safeURL(raw.target.compiled, base, true), image: raw.target.image ? safeURL(raw.target.image, base, true) : null }, asset: { kind: raw.asset.kind, url: safeURL(raw.asset.url, base, true), chroma: raw.chroma || { enabled: false } }, transform, chroma: raw.chroma || { enabled: false } }
+  return { title: String(raw.title || 'AllTheMoney experience').slice(0,120), target: { compiled: safeURL(raw.target.compiled, base, true), aspect: Number(raw.target.aspect) > 0 ? Number(raw.target.aspect) : 7 / 4, image: raw.target.image ? safeURL(raw.target.image, base, true) : null }, asset: { kind: raw.asset.kind, url: safeURL(raw.asset.url, base, true), chroma: raw.chroma || { enabled: false } }, transform, chroma: raw.chroma || { enabled: false } }
 }
 export function viewerLink(manifest, origin = window.location.origin) {
   const url = new URL('/ar', origin)
