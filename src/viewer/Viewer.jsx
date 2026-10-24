@@ -32,7 +32,7 @@ export default function Viewer() {
         if (!window.isSecureContext || !navigator.mediaDevices) throw new Error('Open this link in Safari or Chrome over HTTPS to use your camera.')
         const { startOrbitTracking } = await import('../tracking/tracker.js')
         if (cancelled) return
-        stop = await startOrbitTracking({ container: stage.current, targetSrc: experience.target.compiled, asset: experience.asset, transform: experience.transform,
+        stop = await startOrbitTracking({ container: stage.current, targetSrc: experience.target.compiled, targetAspect: experience.target.aspect, asset: experience.asset, transform: experience.transform,
           onStatus: s => !cancelled && setStatus(s), onFound: () => !cancelled && setFound(true), onLost: () => !cancelled && setFound(false) })
         if (cancelled) await stop(); else controller.current = stop
       } catch(e) { if (!cancelled) setError(e.name === 'NotAllowedError' ? 'Camera access is needed. Allow it in your browser settings, then try again.' : e.message || 'Could not start AR.') }
