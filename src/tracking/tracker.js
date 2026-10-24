@@ -111,7 +111,53 @@ async function addVideo(group, asset, transform) {
   pivot.position.set(p.x, p.y, 0.01)
   pivot.rotation.x = p.tilt
   pivot.rotation.z = p.rotation
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), makeUnlitMaterial(texture, p.opacity))
+  const chroma = asset.chroma || {}
+  const chromaMaterial = chroma.enabled ? new THREE.ShaderMaterial({
+    uniforms: {
+      map: { value: texture },
+      keyColor: { value: new THREE.Color(chroma.keyColor || '#00ff00') },
+      similarity: { value: Number(chroma.similarity ?? 0.34) },
+      smoothness: { value: Number(chroma.smoothness ?? 0.14) },
+      spill: { value: Number(chroma.spill ?? 0.32) },
+      opacity: { value: p.opacity },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      precision mediump float;
+      varying vec2 vUv;
+      uniform sampler2D map;
+      uniform vec3 keyColor;
+      uniform float similarity;
+      uniform float smoothness;
+      uniform float spill;
+      uniform float opacity;
+      vec2 chroma(vec3 c) {
+        return vec2(dot(c, vec3(-0.168736, -0.331264, 0.5)),
+                    dot(c, vec3(0.5, -0.418688, -0.081312)));
+      }
+      void main() {
+        vec4 source = texture2D(map, vUv);
+        float distanceFromKey = distance(chroma(source.rgb), chroma(keyColor));
+        float alpha = smoothstep(similarity, similarity + max(smoothness, 0.001), distanceFromKey);
+        // Reduce green spill at transparent edges.
+        float edge = 1.0 - smoothstep(0.0, 0.42, distanceFromKey);
+        float spillAmount = spill * edge;
+        source.g = mix(source.g, min(source.g, max(source.r, source.b)), spillAmount);
+        gl_FragColor = vec4(source.rgb, source.a * alpha * opacity);
+      }
+    `,
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    toneMapped: false,
+  }) : makeUnlitMaterial(texture, p.opacity)
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), chromaMaterial)
   mesh.position.set(0, height / 2, 0)
   pivot.add(mesh)
   group.add(pivot)
