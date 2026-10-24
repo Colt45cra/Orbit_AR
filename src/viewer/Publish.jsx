@@ -11,7 +11,7 @@ export default function Publish({trigger, asset, transform, title}) {
       const { compileOrbitTarget } = await import('../tracking/tracker.js')
       compiled = await compileOrbitTarget(trigger.file, n => setMessage(`Preparing card tracking: ${n}%`))
       const target = await fetch(compiled.url).then(r=>r.blob())
-      const experience = { version: 1, title, target: { compiled: await blobData(target), image: await blobData(trigger.file) }, asset: { kind: asset.kind, url: await blobData(asset.file) }, transform, chroma: asset.chroma || { enabled: false } }
+      const experience = { version: 1, title, target: { compiled: await blobData(target), image: await blobData(trigger.file), aspect: compiled.imageWidth / compiled.imageHeight }, asset: { kind: asset.kind, url: await blobData(asset.file) }, transform, chroma: asset.chroma || { enabled: false } }
       const downloadURL = URL.createObjectURL(new Blob([JSON.stringify(experience)], {type:'application/json'}))
       const a = document.createElement('a'); a.href = downloadURL; a.download = 'experience.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(downloadURL),1000)
       setMessage('Experience exported. Host experience.json at a public HTTPS URL, then create its QR below.')
