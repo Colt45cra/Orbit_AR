@@ -3,7 +3,7 @@ import * as THREE from 'three';import {GLTFLoader} from 'three/addons/loaders/GL
 const $=s=>document.querySelector(s),v=$('#video'),info=$('#info');let debug=false;const dc=$('#debugCanvas'),ctx=dc.getContext('2d');const bones=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];$('#debugToggle').onclick=e=>{debug=!debug;dc.classList.toggle('off',!debug);$('#debugInfo').classList.toggle('off',!debug);e.target.textContent='Skeleton: '+(debug?'On':'Off')};let stream,tracker,ready=false,facing='environment',two=false,spin=true,modelReady=false,lastVideo=-1,lastInference=0,lastLight=0;const HARDCODED_MODEL_FORWARD={x:0,y:-99,z:-11};const cal={...HARDCODED_MODEL_FORWARD,toss:100};const radians=n=>THREE.MathUtils.degToRad(n);const defaultMapping={x:{axis:'x',sign:1},y:{axis:'z',sign:1},z:{axis:'y',sign:-1}};let mappedMode=false;let mapping;try{mapping=JSON.parse(localStorage.getItem('atm-axis-map-v2')||'null')||structuredClone(defaultMapping)}catch(e){mapping=structuredClone(defaultMapping)};$('#mappedMode').onchange=e=>{mappedMode=e.target.checked;$('#axisFeedback').textContent=mappedMode?'Experimental mapping enabled':'Direct 3D hand tracking enabled'};const lightCanvas=document.createElement('canvas');lightCanvas.width=32;lightCanvas.height=18;const lightCtx=lightCanvas.getContext('2d',{willReadFrequently:true});const ren=new THREE.WebGLRenderer({canvas:$('#canvas'),alpha:true,antialias:true});ren.setPixelRatio(Math.min(devicePixelRatio,1.7));ren.setClearColor(0,0);ren.outputColorSpace=THREE.SRGBColorSpace;const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(46,1,.01,100);cam.position.z=5;const ambient=new THREE.HemisphereLight(0xffffff,0x5c4032,3);scene.add(ambient);const lamp=new THREE.DirectionalLight(0xffe6b3,4);lamp.position.set(-2,4,5);scene.add(lamp);const g=new THREE.DirectionalLight(0x4fffff,2.5);g.position.set(2,1,-3);scene.add(g);
 function resize(){ren.setSize(innerWidth,innerHeight,false);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}addEventListener('resize',resize);resize();
 const shadowCanvas=document.createElement('canvas');shadowCanvas.width=128;shadowCanvas.height=128;const sc=shadowCanvas.getContext('2d');const gradient=sc.createRadialGradient(64,64,7,64,64,63);gradient.addColorStop(0,'rgba(2,14,16,0.45)');gradient.addColorStop(.36,'rgba(3,16,18,0.30)');gradient.addColorStop(1,'rgba(3,16,18,0)');sc.fillStyle=gradient;sc.fillRect(0,0,128,128);const shadowTexture=new THREE.CanvasTexture(shadowCanvas);
-const units=[0,1].map(()=>{const root=new THREE.Group(),obj=new THREE.Group();root.add(obj);scene.add(root);root.visible=false;const shadow=new THREE.Sprite(new THREE.SpriteMaterial({map:shadowTexture,transparent:true,depthWrite:false,opacity:.65}));scene.add(shadow);shadow.visible=false;return {root,obj,shadow,shadowP:new THREE.Vector3(),p:new THREE.Vector3(),dest:new THREE.Vector3(),scale:0,want:1,last:0,initialized:false,introAt:0,roll:0,pitch:0,yaw:0,goalRoll:0,goalPitch:0,goalYaw:0,vel:new THREE.Vector3(),tossOffset:0,tossVelocity:0,lastToss:0,impact:0,previousHandY:0,previousHandAt:0,neutral:null,neutralSamples:[],neutralReady:false,neutralRoll:0,rollSamples:[],handQ:new THREE.Quaternion(),targetHandQ:new THREE.Quaternion()}});
+const units=[0,1].map(()=>{const root=new THREE.Group(),obj=new THREE.Group();root.add(obj);scene.add(root);root.visible=false;const shadow=new THREE.Sprite(new THREE.SpriteMaterial({map:shadowTexture,transparent:true,depthWrite:false,opacity:.65}));scene.add(shadow);shadow.visible=false;return {root,obj,shadow,shadowP:new THREE.Vector3(),p:new THREE.Vector3(),dest:new THREE.Vector3(),scale:0,want:1,last:0,initialized:false,introAt:0,roll:0,pitch:0,yaw:0,goalRoll:0,goalPitch:0,goalYaw:0,vel:new THREE.Vector3(),tossOffset:0,tossVelocity:0,lastToss:0,impact:0,previousHandY:0,previousHandAt:0,neutral:null,neutralSamples:[],neutralReady:false,neutralRoll:0,lastScreenRoll:0,rollSamples:[],handQ:new THREE.Quaternion(),targetHandQ:new THREE.Quaternion()}});
 async function loadModel(){const r=await fetch('./model.b64');if(!r.ok)throw Error('Model download failed');const raw=(await r.text()).trim();const bin=atob(raw),bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);const loader=new GLTFLoader();loader.setMeshoptDecoder(MeshoptDecoder);const item=await new Promise((yes,no)=>loader.parse(bytes.buffer,'',yes,no));const obj=item.scene,box=new THREE.Box3().setFromObject(obj),size=box.getSize(new THREE.Vector3()),mid=box.getCenter(new THREE.Vector3());const scale=1.05/Math.max(size.x,size.y,size.z);obj.scale.setScalar(scale);obj.position.copy(mid).multiplyScalar(-scale);for(const u of units)u.obj.add(obj.clone(true));modelReady=true;info.textContent='Show your open palm'}
 loadModel().catch(e=>{console.error(e);info.textContent='ATM model failed to load: '+e.message});
 async function cameraStart(){stream?.getTracks().forEach(t=>t.stop());stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:720}}});v.srcObject=stream;await v.play();v.classList.toggle('mirror',facing==='user');lastVideo=-1}
@@ -12,7 +12,7 @@ $('#launch').onclick=async()=>{const b=$('#launch');b.disabled=true;$('#status')
 $('#switch').onclick=async()=>{facing=facing==='environment'?'user':'environment';try{await cameraStart()}catch(e){info.textContent=e.message}};
 $('#multi').onclick=e=>{two=!two;e.target.textContent='Hands: '+(two?'2':'1')};$('#spin').onclick=e=>{spin=!spin;for(const u of units)u.introAt=performance.now();e.target.textContent='Intro: '+(spin?'On':'Off')};
 const axisRows=$('#axisRows');for(const key of ['x','y','z']){const line=document.createElement('div');line.className='axisRow';line.innerHTML='<label>Hand '+key.toUpperCase()+'</label><select data-axis="'+key+'"><option value="x">ATM X (pitch)</option><option value="y">ATM Y (yaw)</option><option value="z">ATM Z (roll)</option></select><button data-reverse="'+key+'">Normal</button>';axisRows.append(line)}function syncAxes(){for(const key of ['x','y','z']){$('[data-axis="'+key+'"]').value=mapping[key].axis;$('[data-reverse="'+key+'"]').textContent=mapping[key].sign<0?'Reversed':'Normal'}}syncAxes();for(const key of ['x','y','z']){$('[data-axis="'+key+'"]').onchange=e=>mapping[key].axis=e.target.value;$('[data-reverse="'+key+'"]').onclick=()=>{mapping[key].sign*=-1;syncAxes()}}$('#axisOpen').onclick=()=>{$('#axesPanel').classList.toggle('off');syncAxes()};$('#axisClose').onclick=()=>$('#axesPanel').classList.add('off');$('#axisReset').onclick=()=>{mapping=structuredClone(defaultMapping);syncAxes()};$('#axisSave').onclick=()=>{localStorage.setItem('atm-axis-map-v2',JSON.stringify(mapping));$('#axisFeedback').textContent='Saved on this phone. '+JSON.stringify(mapping)};
-$('#recenter').onclick=()=>{for(const u of units){u.neutral=null;u.neutralSamples=[];u.rollSamples=[];u.neutralRoll=0;u.neutralReady=false;u.handQ.identity();u.targetHandQ.identity();u.introAt=performance.now()-900;u.previousHandAt=0}info.textContent='Hold your palm steady to recenter'};
+$('#recenter').onclick=()=>{for(const u of units){u.neutral=null;u.neutralSamples=[];u.rollSamples=[];u.neutralRoll=0;u.lastScreenRoll=0;u.neutralReady=false;u.handQ.identity();u.targetHandQ.identity();u.introAt=performance.now()-900;u.previousHandAt=0}info.textContent='Hold your palm steady to recenter'};
 function pixel(p){const vw=v.videoWidth||innerWidth,vh=v.videoHeight||innerHeight,z=Math.max(innerWidth/vw,innerHeight/vh);let x=p.x*vw*z-(vw*z-innerWidth)/2,y=p.y*vh*z-(vh*z-innerHeight)/2;if(facing==='user')x=innerWidth-x;return {x,y}}
 function world(p){const hh=10*Math.tan(THREE.MathUtils.degToRad(cam.fov/2)),ww=hh*cam.aspect;return new THREE.Vector3((p.x/innerWidth-.5)*ww,(.5-p.y/innerHeight)*hh,0)}
 function process(res,now){let found=[];if(debug){dc.width=innerWidth*devicePixelRatio;dc.height=innerHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);ctx.clearRect(0,0,innerWidth,innerHeight);for(const hand of res.landmarks||[]){ctx.lineWidth=2;ctx.strokeStyle='#39ffdf';ctx.fillStyle='#ffe66d';for(const [a,b] of bones){const p=pixel(hand[a]),q=pixel(hand[b]);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke()}for(const point of hand){const p=pixel(point);ctx.beginPath();ctx.arc(p.x,p.y,3,0,Math.PI*2);ctx.fill()}}$('#debugInfo').textContent='Detected hands: '+(res.landmarks?.length||0)}for(const [handIndex,lm] of (res.landmarks||[]).entries()){const a=pixel(lm[5]),b=pixel(lm[17]),m=pixel(lm[9]),w=pixel(lm[0]),tip=pixel(lm[12]);const span=Math.hypot(a.x-b.x,a.y-b.y);const palmLength=Math.hypot(m.x-w.x,m.y-w.y);if(Math.max(span,palmLength)<14)continue;const p={x:(a.x+b.x+m.x+w.x)/4,y:(a.y+b.y+m.y+w.y)/4-Math.max(65,span*.95)};// Construct a rigid palm coordinate frame from anatomical landmarks.
@@ -35,17 +35,17 @@ if(forward.lengthSq()<.00001)continue;
 const right=up.clone().cross(forward).normalize();
 const basis=new THREE.Matrix4().makeBasis(right,up,forward);
 const palmQ=new THREE.Quaternion().setFromRotationMatrix(basis).normalize();
-const screenRoll=Math.atan2(m.x-w.x,w.y-m.y);
-found.push({p:world(p),scale:Math.min(1.7,Math.max(.5,Math.max(span,palmLength*.65)/130)),span,palmQ,screenRoll})
+const screenRoll=Math.atan2(m.x-w.x,w.y-m.y);const screenRollReliable=palmLength>Math.max(16,span*.18);
+found.push({p:world(p),scale:Math.min(1.7,Math.max(.5,Math.max(span,palmLength*.65)/130)),span,palmQ,screenRoll,screenRollReliable})
 }found.sort((a,b)=>b.span-a.span);found=found.slice(0,two?2:1);for(const u of units){if(!found.length)break;let best=0;if(u.initialized&&found.length>1&&u.p.distanceTo(found[1].p)<u.p.distanceTo(found[0].p))best=1;const x=found.splice(best,1)[0];u.dest.copy(x.p);u.shadowP.copy(x.p);u.shadowP.y-=Math.max(.5,x.scale*.85);u.want=x.scale;if(!u.neutralReady){
  // Wait for the entrance to almost finish before locking the starting pose.
  if(now-u.introAt>=850){
   u.neutralSamples.push(x.palmQ.clone());
-  u.rollSamples.push(x.screenRoll);
+  if(x.screenRollReliable)u.rollSamples.push(x.screenRoll);
   if(u.neutralSamples.length>=5){
    u.neutral=u.neutralSamples[0].clone();
    for(let i=1;i<u.neutralSamples.length;i++)u.neutral.slerp(u.neutralSamples[i],1/(i+1));
-   u.neutralRoll=Math.atan2(u.rollSamples.reduce((v,n)=>v+Math.sin(n),0),u.rollSamples.reduce((v,n)=>v+Math.cos(n),0));
+   u.neutralRoll=u.rollSamples.length?Math.atan2(u.rollSamples.reduce((v,n)=>v+Math.sin(n),0),u.rollSamples.reduce((v,n)=>v+Math.cos(n),0)):x.screenRoll;u.lastScreenRoll=u.neutralRoll;
    u.neutralReady=true;u.handQ.identity();u.targetHandQ.identity();
   }
  }
@@ -53,17 +53,23 @@ found.push({p:world(p),scale:Math.min(1.7,Math.max(.5,Math.max(span,palmLength*.
  // Full rigid-body rotation, relative to the first captured palm pose.
  // No Euler decomposition, axis swapping, or orientation re-mapping.
 
- // The hand's initial rigid pose is identity.  Apply its FULL camera-space
- // movement, including 180-degree flips, to the user's calibrated ATM base.
+ // Preserve 180-degree longitudinal wrist twist as a camera-facing roll:
+ // front stays visible when the back of the hand faces upward, while fingertip
+ // pitch (lifting toward the face) still reveals the top of the ATM.
  const relative=x.palmQ.clone().multiply(u.neutral.clone().invert()).normalize();
- // Camera-plane roll remains measurable even when the depth estimate becomes
- // ambiguous as the wrist turns edge-on.
- const deltaRoll=Math.atan2(Math.sin(x.screenRoll-u.neutralRoll),Math.cos(x.screenRoll-u.neutralRoll));
- const twistLength=Math.hypot(relative.z,relative.w);
- const twist=twistLength>1e-5?new THREE.Quaternion(0,0,relative.z/twistLength,relative.w/twistLength):new THREE.Quaternion();
- const swing=relative.clone().multiply(twist.clone().invert()).normalize();
- const rollQ=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),deltaRoll);
- const direct=rollQ.multiply(swing).normalize();
+ const anatomicalUp=new THREE.Vector3(0,1,0).applyQuaternion(u.neutral);
+ const axial=relative.x*anatomicalUp.x+relative.y*anatomicalUp.y+relative.z*anatomicalUp.z;
+ const twistNorm=Math.hypot(axial,relative.w);
+ const handTwist=twistNorm>1e-5?new THREE.Quaternion(anatomicalUp.x*axial/twistNorm,anatomicalUp.y*axial/twistNorm,anatomicalUp.z*axial/twistNorm,relative.w/twistNorm):new THREE.Quaternion();
+ const noAxial=relative.clone().multiply(handTwist.clone().invert()).normalize();
+ const cameraTwistNorm=Math.hypot(noAxial.z,noAxial.w);
+ const cameraTwist=cameraTwistNorm>1e-5?new THREE.Quaternion(0,0,noAxial.z/cameraTwistNorm,noAxial.w/cameraTwistNorm):new THREE.Quaternion();
+ const pitchAndYaw=noAxial.clone().multiply(cameraTwist.clone().invert()).normalize();
+ if(x.screenRollReliable)u.lastScreenRoll=x.screenRoll;
+ const deltaRoll=Math.atan2(Math.sin(u.lastScreenRoll-u.neutralRoll),Math.cos(u.lastScreenRoll-u.neutralRoll));
+ const anatomicalRoll=2*Math.atan2(axial,relative.w);
+ const rollQ=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),deltaRoll+anatomicalRoll);
+ const direct=rollQ.multiply(pitchAndYaw).normalize();
  if(mappedMode){
    const e=new THREE.Euler().setFromQuaternion(direct,'YXZ');
    const input={x:e.x,y:e.y,z:e.z},output={x:0,y:0,z:0};
